@@ -6,6 +6,1614 @@ output: html_document
 ---
 
 ```{r}
+setwd("/Users/hyoon/Desktop/apsa_interdistrict")
+library(DBI)
+library(RSQLite)
+library(dplyr)
+library(tidyverse)
+library(sf)
+library(lwgeom)
+library(ggmap)
+library(usdata)
+library(reshape)
+library(readxl)
+library(fixest)
+library(haven)
+library(broom)
+library(dotwhisker)
+
+#############================================================================
+### DIME data
+### Bringing necessary data in from SQL 
+
+portaldb <- dbConnect(SQLite(), "/Users/hyoon/Desktop/apsa_interdistrict/dime.sqlite3")
+
+## recipient data
+cand <- dbGetQuery(portaldb, "SELECT election, cycle, fecyear, bonica_rid, bonica_cid, name, party, 
+                                     state, seat, district, Incum_Chall, recipient_cfscore, contributor_cfscore, 
+                                     recipient_cfscore_dyn, dwnom1, dwnom2, ps_dwnom1, ps_dwnom2, dwdime, 
+                                     num_givers, cand_gender, total_disbursements, contribs_from_candidate, 
+                                     unitemized, total_receipts, total_indiv_contrib, ran_primary, ran_general, p_elec_stat, 
+                                     gen_elec_stat, gen_elect_pct, winner, recipient_type  
+                              FROM candDB
+                              WHERE cycle >=2000 AND seat = 'federal:house' AND recipient_type = 'cand'")
+#write.csv(cand, "cand.csv")
+
+## contributor data
+cont <- dbGetQuery(portaldb, "SELECT cycle, amount, date, bonica_cid, contributor_name, contributor_type, contributor_city,
+                                    contributor_state, contributor_zipcode, recipient_name, bonica_rid, recipient_party,
+                                    recipient_type, recipient_state, seat, election_type, contributor_district_90s, 
+                                    contributor_district_00s, contributor_district_10s, contributor_cfscore, candidate_cfscore
+                              FROM contribDB
+                              WHERE contributor_type = 'I' AND recipient_type = 'cand'
+                              AND seat = 'federal:house' AND election_type = 'P' AND cycle >= 2000")
+
+cont <- cont %>% mutate(date = as.Date(cont$date),
+                        con_district = case_when(cont$cycle == 2000 ~ cont$contributor_district_90s,
+                                                 cont$cycle %in% c(2002, 2004, 2006, 2008, 2010) ~ cont$contributor_district_00s,
+                                                 cont$cycle %in% c(2012, 2014) ~ cont$contributor_district_10s))
+#write.csv(cont, "cont.csv")
+
+## add recipient info to contributor data
+join <- left_join(cont %>% select(cycle, amount, date, bonica_cid, contributor_city, contributor_state, recipient_name, 
+                                  bonica_rid, recipient_party, recipient_state, contributor_cfscore, candidate_cfscore, con_district), 
+                  cand %>% select(cycle, bonica_rid, name, party, state, district, Incum_Chall, recipient_cfscore,
+                                  recipient_cfscore_dyn, dwnom1, dwnom2, ps_dwnom1, ps_dwnom2, dwdime,
+                                  num_givers, cand_gender, total_disbursements, contribs_from_candidate, 
+                                  unitemized, total_receipts, total_indiv_contrib, ran_primary, ran_general, p_elec_stat, 
+                                  gen_elec_stat, gen_elect_pct, winner),
+                  by = c('cycle', 'bonica_rid')) %>%
+  select(-c(candidate_cfscore, name, recipient_party, state)) %>%
+  mutate(same = ifelse(.$con_district == .$district, 1,0)) %>%
+  mutate(out = ifelse(.$same == 1, 0, 1))
+#write.csv(join, "join.csv")
+
+## difference b/w party and recipient party??
+# party is from recipient data and recipient party is from contributor data
+
+
+# #############==TRIAL==============================================================
+# ### Disaster data
+# 
+# ## fips for county codes
+# fips <- read.csv("state-geocodes-v2016.csv") %>% 
+#   rename(Region = Census.Bureau.Region.and.Division.Codes.and.Federal.Information.Processing.System..FIPS..Codes.for.States, 
+#          Division = X,
+#          FIPS = X.1, 
+#          Name = X.2) %>%
+#   mutate(abb = state2abbr(.$Name))
+# 
+# fips <- fips[-c(1,2,3,4,5,6,7,14,18,19,25,33,34,44,49,54,55,64),]
+# 
+# ## county-district matching from census
+# cd109 <- read.delim("cou_cd109_natl.txt") %>%
+#   mutate(state = str_extract(.$CONGRESSIONAL.DISTRICTS.BY.COUNTIES..NATIONAL., "^[^,]*(?=,)"),
+#          county = str_extract(.$CONGRESSIONAL.DISTRICTS.BY.COUNTIES..NATIONAL., "(?<=,)[^,]*(?=,)"),
+#          district = str_extract(.$CONGRESSIONAL.DISTRICTS.BY.COUNTIES..NATIONAL., "(?<=,)[^,]*$")) %>%
+#   slice(-1) %>% select(-1) %>% 
+#   left_join(., fips %>% select(FIPS, abb), by = c("state"="FIPS")) %>%
+#   mutate(cong = paste0(.$abb, .$district)) %>% select(-state)
+# 
+# cd113 <- read.delim("natl_cocd_delim13.txt") %>%
+#   mutate(state = str_extract(.$CONGRESSIONAL.DISTRICTS.BY.COUNTY..NATIONAL., "^[^,]*(?=,)"),
+#          county = str_extract(.$CONGRESSIONAL.DISTRICTS.BY.COUNTY..NATIONAL., "(?<=,)[^,]*(?=,)"),
+#          district = str_extract(.$CONGRESSIONAL.DISTRICTS.BY.COUNTY..NATIONAL., "(?<=,)[^,]*$")) %>%
+#   slice(-1) %>% select(-1) %>% 
+#   left_join(., fips %>% select(FIPS, abb), by = c("state"="FIPS")) %>%
+#   mutate(cong = paste0(.$abb, .$district)) %>% select(-state) 
+# 
+# 
+# ## fema for disaster data
+# fema <- read.csv("FemaWebDeclarationAreas.csv")  %>% 
+#   mutate(designatedDate = as.Date(substr(.$designatedDate, 1, 10)),
+#          countycode = as.numeric(str_sub(.$placeCode, 3))) %>%
+#   mutate(countycode = sprintf("%03d", as.numeric(.$countycode))) %>%
+#   filter(designatedDate >= "1999-01-01" & designatedDate < "2014-12-12") # 107-114
+# 
+# fema00 <- fema %>% filter(designatedDate <= "2008-12-12") %>% 
+#   left_join(., cd109 %>% select(county, abb, cong), by = c("countycode"="county", "stateCode"="abb"))
+# 
+# fema10 <- fema %>% filter(designatedDate > "2008-12-12") %>% 
+#   left_join(., cd113 %>% select(county, abb, cong), by = c("countycode"="county", "stateCode"="abb"))
+# 
+# fema_area <- rbind(fema00, fema10)
+# 
+# # add fema_declaration for more info on disasters
+# fema_dec <- read.csv("FemaWebDisasterDeclarations.csv") %>% 
+#   mutate(declarationDate <- as.Date(substr(.$declarationDate, 1, 10)))
+# 
+# fema <- left_join(fema_area, fema_dec, by = c("disasterNumber"="disasterNumber")) %>%
+#   filter(declarationType == "Major Disaster") %>% 
+#   select(programTypeDescription, stateCode.x, designatedDate, cong, 
+#          declarationDate, disasterName, incidentType, countycode) %>%
+#   distinct() %>% mutate(year = substr(.$declarationDate, start = 1, stop = 4),
+#                         month = substr(.$declarationDate, start = 6, stop = 7)) %>%
+#   mutate_at(c('year', 'month'), as.integer)
+# # area file: The date a disaster was officially designated (designatedDate. declare.date.x)
+# # declaration file: The date the disaster was declared (declarationDate. declare.date.y)
+# 
+# 
+# # em-dat data
+# emdat <- read.csv("emdat_public_trial.csv", na.strings=c("", "NA")) %>% 
+#   filter(Country=="United States of America (the)") %>%
+#   melt(id.vars=c("Dis.No", "Year", "Seq", "Disaster.Group", "Disaster.Subgroup", 
+#                                "Disaster.Type", "Disaster.Subtype", "Disaster.Subsubtype",
+#                                "Event.Name",  "Entry.Criteria", "Country", "ISO", "Region", 
+#                                "Continent", "X", "Origin", "Associated.Dis", "Associated.Dis2", 
+#                                "OFDA.Response", "Appeal", "Declaration", "Aid.Contribution",
+#                                "Dis.Mag.Value", "Dis.Mag.Scale", "Latitude", "Longitude", 
+#                                "Local.Time", "River.Basin", "Start.Year", "Start.Month", 
+#                                "Start.Day", "End.Year", "End.Month", "End.Day", "Total.Deaths", 
+#                                "No.Injured", "No.Affected", "No.Homeless", "Total.Affected", 
+#                                "Reconstruction.Costs...000.US..", "Insured.Damages...000.US..", 
+#                                "Total.Damages...000.US..", "CPI")) %>%
+#   drop_na("value") %>% select(Start.Year, Start.Month, Start.Day, End.Year, End.Month, End.Day, 
+#                               Disaster.Subgroup, Disaster.Type, Disaster.Subtype, Event.Name, 
+#                               Entry.Criteria, Total.Deaths, No.Injured, 
+#                               No.Affected, Total.Affected, Total.Damages...000.US.., value) %>%
+#   mutate(abb = state2abbr(.$value))
+# 
+# ## join fema and emdat
+# disaster <- left_join(fema, emdat, by = c("stateCode.x"="abb", 
+#                                           "year"="Start.Year",
+#                                           "month"="Start.Month")) %>% drop_na("value") %>%
+#   mutate(declarationDate = as.Date(.$declarationDate),
+#          stateCode = .$stateCode.x) %>%
+#   select(programTypeDescription, stateCode, 
+#          designatedDate, declarationDate, cong, 
+#          disasterName, incidentType,
+#          Disaster.Type, Event.Name,
+#          Entry.Criteria, Total.Deaths,
+#          No.Injured, No.Affected,
+#          Total.Affected, 
+#          Total.Damages...000.US.., countycode) 
+# 
+# #write.csv(disaster, "disaster.csv")
+# 
+# 
+# #############================================================================
+# ### Adding disaster info to congressional districts
+# 
+# pri <- read.csv("primarydates.csv") %>% # 1994-2018
+#   mutate(pri.date = as.Date(.$date, "%m/%d/%Y"),
+#          prev = .$election_year + 2)
+# 
+# # set disaster to be the top 25 percentile
+# # reasoning: least number of missing values
+# disaster <- disaster %>% filter(Total.Deaths > 47)
+# 
+# # function to map disaster to district  
+# cong_disaster <- function(df, number, date){
+#   
+#   # add year, primary dates for each state  
+#   cd <- df %>% mutate(year = number) %>%
+#     left_join(., pri %>% select(state_abbr, election_year, pri.date),
+#               by=c("abb"="state_abbr", "year"="election_year")) %>%
+#     left_join(., pri %>% select(state_abbr, prev, pri.date),
+#               by=c("abb"="state_abbr", "year"="prev")) %>% # pri.x is date of election, pri.y is date of previous election
+#     mutate(unq = paste0(.$cong, .$county)) 
+#   
+#   # join cd and disaster
+#   cd_treat <- left_join(cd, disaster, 
+#                         by=c("abb"="stateCode", "county"="countycode")) %>% 
+#     filter(declarationDate> date & declarationDate<pri.date.x) %>% select(unq, declarationDate)
+#   
+#   cd <- left_join(cd %>% mutate(disaster = ifelse(cd$unq %in% cd_treat$unq, 1, 0)), cd_treat,
+#                      by = "unq")
+#   
+#   # collapse to congressional district
+#   cd <- left_join(cd %>% group_by(cong) %>% dplyr::summarize(dis=mean(disaster)) %>% mutate(treat=ifelse(dis>0.5, 1, 0)),
+#                      cd %>% group_by(cong) %>% arrange(desc(declarationDate)) %>% slice(which.max(disaster)) %>% select(cong, pri.date.x, declarationDate, year), 
+#                      by="cong")
+#   return(cd)
+# }
+# 
+# ## run function for all congressional years
+# cd107 <- cong_disaster(cd109, 2000, "1999-01-01")
+# cd108 <- cong_disaster(cd109, 2002, "2001-01-01")
+# cd110 <- cong_disaster(cd109, 2006, "2005-01-01")
+# cd111 <- cong_disaster(cd109, 2008, "2007-01-01")
+# cd112 <- cong_disaster(cd113, 2010, "2009-01-01")
+# cd114 <- cong_disaster(cd113, 2014, "2013-01-01")
+# # change these last b/c they will affect others using this
+# cd109 <- cong_disaster(cd109, 2004, "2003-01-01") 
+# cd113 <- cong_disaster(cd113, 2012, "2011-01-01")
+# 
+# ## merge all congressional years
+# cd_join <- rbind(cd107, cd108, cd109, cd110, cd111, cd112, cd113, cd114) %>%
+#   mutate(declarationDate = ifelse(.$treat == 0, NA, .$declarationDate),
+#          close = .$pri.date.x - .$declarationDate ) 
+# 
+# #write.csv(cd_join, "cd_join.csv")
+
+
+
+#############==TRIAL 2 (based on codes.R)==============================================================
+### Disaster data
+
+# fema: county-level
+fema <- read.csv("FemaWebDeclarationAreas.csv")  %>% 
+  mutate(designatedDate = as.Date(substr(.$designatedDate, 1, 10)),
+         countycode = as.numeric(str_sub(.$placeCode, 3))) %>%
+  mutate(countycode = sprintf("%03d", as.numeric(.$countycode))) %>%
+  filter(designatedDate >= "1999-01-01" & designatedDate < "2014-12-12") %>%
+  select("disasterNumber", "stateCode", "placeName", "designatedDate", "countycode") %>%
+  mutate(year = as.integer(substr(.$designatedDate, start=1, stop=4)),
+         month = as.integer(substr(.$designatedDate, start=6, stop=7)))
+
+# cred (em-dat): state-level damage
+cred <- read_excel("emdat_public_2023_09_14_query_uid-ie2A3A.xlsx") 
+colnames(cred) <- cred[6,]
+cred <- cred %>% slice(-c(1:6),) %>% filter(ISO == "USA") %>% 
+  filter(`Adm Level` !=2) %>% # adm level 2 is county level, adm level 1 is state level
+  mutate(adm1 = sub("\\(Adm1).*", "", .$`Geo Locations`)) %>%
+  drop_na(`Start Day`) %>%
+  mutate(`Start Year` =  as.integer(.$`Start Year`),
+         `Start Month` = as.integer(.$`Start Month`))
+
+cred <- separate_rows(cred, adm1, sep=",") 
+cred$adm1 <- str_trim(cred$adm1, "left")
+cred$adm1 <- str_trim(cred$adm1, "right")
+cred$state <- state.abb[match(cred$adm1,state.name)]
+
+cred$date <- as.Date(paste(cred$`Start Year`, cred$`Start Month`, cred$`Start Day`, sep="-"))
+
+# count # of NAs 
+cred_na <- cred %>% summarise(across(c(`Total Deaths`:`Total Damages, Adjusted ('000 US$)`), ~ sum(is.na(.))))
+# variables that have the least amount of missingness is deaths < damages < affected
+
+cred <- cred %>% select("Year", "Seq", "Disaster Type", "Total Deaths", "Total Affected", "Total Damages, Adjusted ('000 US$)", "state", "date",
+                        "Start Year", "Start Month", "Start Day") 
+
+
+# disaster criteria
+#cred <- cred %>% mutate(death10 = ifelse(.$`Total Deaths` >= 41, 1, 0),
+#                        affect10 = ifelse(.$`Total Affected` >= 102000, 1, 0)) %>%
+#  mutate(death10 = ifelse(is.na(.$death10 == T), 0, .$death10),
+#         affect10 = ifelse(is.na(.$affect10 == T), 0, .$affect10)) %>%
+#  mutate(both = ifelse(.$death10 == 1 & affect10 ==1, 1, 0))
+
+
+# join fema and cred
+disaster <- left_join(fema, cred, 
+                      by = c("stateCode"="state",
+                             "year"="Start Year",
+                             "month"="Start Month")) %>% drop_na("Seq") %>% distinct()
+
+#############==mapping==============================================================
+### mapping counties to districts (refer to disaster.Rmd)
+
+## fips for county codes
+fips <- read.csv("state-geocodes-v2016.csv") %>% 
+  dplyr::rename(Region = 1,
+                Division = 2,
+                FIPS = 3, 
+                Name = 4) %>% 
+  slice(., -c(1:5)) %>%
+  mutate(abb = state2abbr(.$Name),
+         FIPS = as.numeric(.$FIPS)) %>%
+  filter(FIPS >= 1) %>%  arrange(FIPS)
+
+# congressional district by county (from census)
+clean_df <- function(file) {
+  x <- read.delim(file, sep=",", header=F) %>% 
+    dplyr::rename(state = V1,
+           county = V2,
+           district = V3) %>% 
+    slice(-1:-2) %>% mutate(state=as.numeric(state))
+}
+
+cd109 <- clean_df("cou_cd109_natl.txt") # 51 states, census 00
+cd110 <- clean_df("cou_cd110_natl.txt") # 51 states, census 00
+cd113 <- clean_df("natl_cocd_delim13.txt") # 43 states, census 10
+cd116 <- clean_df("natl_cocd_delim16.txt") # 43 states, census 10
+
+# cd109: 108~109
+# cd110: 110~112
+# cd113: 113~116
+
+join <- function(dat){
+  dat = left_join(dat, fips %>% dplyr::select(FIPS, abb), by=c("state"="FIPS")) %>% 
+    mutate(cong = paste0(.$abb, .$district))
+  return(dat)
+}
+
+cd107 <- join(cd109) %>% mutate(cd = "cd107",
+                                year = "2000", # election cycle
+                                anl.begin = as.Date("1999-01-01")) # to include disasters that happened beforehand
+
+cd108 <- join(cd109) %>% mutate(cd = "cd108",
+                                year = "2002", 
+                                anl.begin = as.Date("2001-01-01")) 
+
+cd111 <- join(cd110) %>% mutate(cd = "cd111",
+                                year = "2008",
+                                anl.begin = as.Date("2007-01-01"))
+
+cd112 <- join(cd110) %>% mutate(cd = "cd112",
+                                year = "2010",
+                                anl.begin = as.Date("2009-01-01"))
+
+cd114 <- join(cd113) %>% mutate(cd = "cd114",
+                                year = "2014",
+                                anl.begin = as.Date("2013-01-01"))
+
+cd115 <- join(cd113) %>% mutate(cd = "cd115",
+                                year = "2016",
+                                anl.begin = as.Date("2015-01-01"))
+
+# put these last so it wouldn't affect others
+cd109 <- join(cd109) %>% mutate(cd = "cd109",
+                                year = "2004",
+                                anl.begin = as.Date("2003-01-01"))
+
+cd110 <- join(cd110) %>% mutate(cd = "cd110",
+                                year = "2006",
+                                anl.begin = as.Date("2005-01-01"))
+
+cd113 <- join(cd113) %>% mutate(cd = "cd113",
+                                year = "2012",
+                                anl.begin = as.Date("2011-01-01"))
+
+cd116 <- join(cd116) %>% mutate(cd = "cd116",
+                                year = "2018",
+                                anl.begin = as.Date("2017-01-01"))
+
+cong <- rbind(cd107, cd108, cd109, cd110, cd111, cd112, cd113, cd114, cd115, cd116) %>%
+  mutate(year = as.integer(.$year))
+
+# add primary dates for each election year
+pri <- read.csv("primarydates.csv") %>% # 1994-2018
+  mutate(pri = as.Date(.$date, "%m/%d/%Y"))
+
+# add primary dates
+cong <- left_join(cong, pri %>% dplyr::select(election_year, state_abbr, pri), 
+                  by = c("year" = "election_year", "abb" = "state_abbr")) %>%
+  mutate(anl.begin = as.Date(.$anl.begin),
+         pri = as.Date(.$pri)) %>% select(-state)
+
+#write.csv(cong, "cong.csv")
+
+
+#############==mapping==============================================================
+### mapping counties to districts (refer to disaster.Rmd)
+# disaster df is in county level and cong is in district level
+
+trial <- left_join(cong %>% mutate(county = as.numeric(.$county)), 
+                   disaster %>% mutate(countycode = as.numeric(.$countycode)),
+                   by = c("county"="countycode",
+                          "abb"="stateCode")) %>% 
+  filter(anl.begin <= date & pri >= date) %>%
+  mutate(close = .$pri - .$date)
+
+# only extract districts
+try <- unique(trial[c("year.x", "cong","close", "pri", "Total Deaths", "Total Affected", "Total Damages, Adjusted ('000 US$)")]) 
+
+
+## coding decision time
+# check for duplicates (as in multiple disasters in one district)
+try_dupe <- try %>% group_by(year.x, cong) %>% filter(n() > 1) %>% arrange(year.x, cong, close) %>% ungroup(.)
+
+# show ones with more than one disasters in the district
+try %>% group_by(year.x, cong) %>% summarize(num = n())
+
+# add up the disaster damage and for disaster date choose the one closer to primary date. also filter for only those happened <300 
+dupe <- try_dupe %>% mutate_at(c("Total Deaths", "Total Affected", "Total Damages, Adjusted ('000 US$)"), funs(as.numeric)) %>% 
+  group_by(year.x, cong) %>% filter(close < 300) %>% summarize(deaths = sum(`Total Deaths`),
+                                               affected = sum(`Total Affected`),
+                                               damages = sum(`Total Damages, Adjusted ('000 US$)`),
+                                               num = n()) 
+dupe2 <- try_dupe %>% group_by(year.x, cong) %>% arrange(year.x, cong, close) %>% slice(1) %>% select(year.x, cong, close, pri)
+
+try_dupe2 <- left_join(dupe, dupe2, by = c("year.x"="year.x",
+                                           "cong"="cong"))
+
+
+# try_dupe2 contains disasters that have more than 1 disaster in an election year
+# try_dupe0 is ones that only had 1 disaster
+try_dupe0 <- try %>% group_by(year.x, cong) %>% filter(n()==1) %>% dplyr::rename(deaths = 5,
+                                                                          affected = 6,
+                                                                          damages = 7) %>% 
+  mutate(num = 1) %>% mutate_at(c("deaths", "affected", "damages"), funs(as.numeric))
+
+try <- rbind(try_dupe0, try_dupe2)
+
+
+## another dataset with all disasters including >300 (try2)
+# leave all disaster data (including > 300)
+dupe3 <- try_dupe %>% mutate_at(c("Total Deaths", "Total Affected", "Total Damages, Adjusted ('000 US$)"), funs(as.numeric)) %>% 
+  group_by(year.x, cong) %>% summarize(deaths = sum(`Total Deaths`),
+                                       affected = sum(`Total Affected`),
+                                       damages = sum(`Total Damages, Adjusted ('000 US$)`),
+                                       num = n()) 
+
+try_dupe3 <- left_join(dupe3, dupe2, by = c("year.x"="year.x",
+                                            "cong"="cong"))
+
+try2 <- rbind(try_dupe0, try_dupe3) 
+
+#############==join disaster (df: try) and dime (df: join)==============================================================
+
+join <- read.csv("join.csv") # do this bc i made join a function above
+
+agg <- join %>% dplyr::group_by(district, cycle, party) %>% drop_na(same) %>%
+  summarize(count = n(),
+            n.in = sum(same==1),
+            n.out = sum(same==0),
+            amt.in = sum(amount[same==1]),
+            amt.out = sum(amount[same==0])) %>%
+  mutate(pct.out = n.out/(n.in+n.out)*100,
+         pct.amt.out = amt.out/(amt.in+amt.out)*100)
+
+agg <- left_join(agg, try,
+                 by = c("cycle" = "year.x",
+                        "district" = "cong"))
+
+# check for duplications
+agg[duplicated(agg[,1:3]),]
+
+agg <- agg %>% ungroup(.) %>% mutate(num = ifelse(is.na(.$num)==T, 0, .$num),
+                      deaths = ifelse(is.na(.$deaths)==T, 0, .$deaths),
+                      affected = ifelse(is.na(.$affected)==T, 0, .$affected),
+                      damages = ifelse(is.na(.$damages)==T, 0, .$damages))
+
+
+#############================================================================
+### descriptive stats
+
+## recipient data
+cand_all <- dbGetQuery(portaldb, "SELECT election, cycle, fecyear, bonica_rid, bonica_cid, name, party, 
+                                     state, seat, district, Incum_Chall, recipient_cfscore, contributor_cfscore, 
+                                     recipient_cfscore_dyn, dwnom1, dwnom2, ps_dwnom1, ps_dwnom2, dwdime, 
+                                     num_givers, cand_gender, total_disbursements, contribs_from_candidate, 
+                                     unitemized, total_receipts, total_indiv_contrib, ran_primary, ran_general, p_elec_stat, 
+                                     gen_elec_stat, gen_elect_pct, winner, recipient_type  
+                              FROM candDB
+                              WHERE cycle > 1990 AND seat = 'federal:house' AND recipient_type = 'cand'")
+
+## contributor data
+cont_all <- dbGetQuery(portaldb, "SELECT cycle, amount, date, bonica_cid, contributor_name, contributor_type, contributor_city,
+                                    contributor_state, contributor_zipcode, recipient_name, bonica_rid, recipient_party,
+                                    recipient_type, recipient_state, seat, election_type, contributor_district_90s, 
+                                    contributor_district_00s, contributor_district_10s, contributor_cfscore, candidate_cfscore
+                              FROM contribDB
+                              WHERE cycle > 1990 AND contributor_type = 'I' AND recipient_type = 'cand'
+                              AND seat = 'federal:house' AND election_type = 'P'")
+
+cont_all <- cont_all %>% mutate(date = as.Date(cont_all$date),
+                        con_district = case_when(cont_all$cycle %in% c(1992, 1994, 1996, 1998, 2000) ~ cont_all$contributor_district_90s,
+                                                 cont_all$cycle %in% c(2002, 2004, 2006, 2008, 2010) ~ cont_all$contributor_district_00s,
+                                                 cont_all$cycle %in% c(2012, 2014) ~ cont_all$contributor_district_10s))
+
+## add recipient info to contributor data
+join_all <- left_join(cont_all %>% select(cycle, amount, date, bonica_cid, contributor_city, contributor_state, recipient_name, 
+                                  bonica_rid, recipient_party, recipient_state, contributor_cfscore, candidate_cfscore, con_district), 
+                  cand_all %>% select(cycle, bonica_rid, name, party, state, district, Incum_Chall, recipient_cfscore,
+                                  recipient_cfscore_dyn, dwnom1, dwnom2, ps_dwnom1, ps_dwnom2, dwdime,
+                                  num_givers, cand_gender, total_disbursements, contribs_from_candidate, 
+                                  unitemized, total_receipts, total_indiv_contrib, ran_primary, ran_general, p_elec_stat, 
+                                  gen_elec_stat, gen_elect_pct, winner),
+                  by = c('cycle', 'bonica_rid')) %>% 
+  select(-c(candidate_cfscore, name, recipient_party, state)) %>%
+  mutate(same = ifelse(.$con_district == .$district, 1,0)) %>%
+  mutate(out = ifelse(.$same == 1, 0, 1))
+
+trend_all <- join_all %>% group_by(cycle, party) %>% drop_na(same) %>%
+  summarize(count = n(),
+            n.in = sum(same==1),
+            n.out = sum(same==0),
+            amt.in = sum(amount[same==1]),
+            amt.out = sum(amount[same==0])) %>%
+  mutate(pct.out = n.out/(n.in+n.out)*100,
+         pct.amt.out = amt.out/(amt.in+amt.out)*100)
+
+# pct of out district donations thruout years
+ggplot(trend_all %>% filter(party %in% c(100, 200)) %>% filter(cycle > 1992), aes(x=cycle, y=pct.out, color = party)) + 
+  geom_point() + geom_line() + ylim(0,80) + theme(legend.position="bottom") +
+  xlab("") + ylab("% Out-of-District Donations") +
+  scale_color_manual(values=c( "#56B4E9", "#E69F00"), name = "Party", labels = c("Dem", "Rep")) 
+
+ggsave("trend.pdf", plot = last_plot(),
+       width = 6, height = 4)
+  
+# attempt to replicate figure 1
+agg <- agg %>% ungroup(.) %>% mutate(pct.out = round(agg$pct.out, 2))
+  
+ggplot(agg %>% filter(party %in% c(100,200)) %>% filter(cycle == 2014) %>% filter(pct.out > 0 & pct.out < 100),
+       aes(x=pct.out, color = party, fill = party)) + 
+  geom_histogram(aes(y=..density..), alpha = 0.4) + 
+  scale_fill_manual(values=c( "#56B4E9", "#E69F00"), name = "Party", labels = c("Dem", "Rep")) +
+  scale_color_manual(values=c( "#56B4E9", "#E69F00"), name = "Party", labels = c("Dem", "Rep")) 
+
+ggplot(agg %>% filter(recipient_party %in% c(100, 200)) %>% filter(cycle == 2014),
+       aes(x=pct.out)) + 
+  geom_histogram(aes(color = recipient_party), alpha = 0.4) +
+  scale_color_manual(values=c( "#56B4E9", "#E69F00"), name = "Party", labels = c("Dem", "Rep")) 
+
+
+###Analysis==========================================================================================
+
+quantile(agg$deaths[agg$num > 0], probs=seq(0,1,0.1)) # >46
+quantile(agg$affected[agg$num > 0], probs=seq(0,1,0.1)) # >225000
+quantile(agg$damages[agg$num > 0], probs=seq(0,1,0.1)) # >9916769
+
+quantile(agg2$deaths[agg2$num > 0], probs=seq(0,1,0.1)) # >68
+quantile(agg2$affected[agg2$num > 0], probs=seq(0,1,0.1)) # >225000
+quantile(agg2$damages[agg2$num > 0], probs=seq(0,1,0.1)) # >9916769
+
+agg <- agg %>% mutate(nd_death = ifelse(deaths >= 46, 1, 0),
+                      nd_affected = ifelse(affected >=225000, 1, 0),
+                      nd_damages = ifelse(damages >= 9916769, 1, 0))
+
+feols(n.in ~ nd_death | district + cycle + party, agg)
+feols(n.out ~ nd_death | district + cycle + party, agg)
+feols(amt.in ~ nd_death | district + cycle + party, agg)
+feols(amt.out ~ nd_death | district + cycle + party, agg)
+
+feols(n.in ~ nd_death | district + cycle + party, agg2)
+feols(n.out ~ nd_death | district + cycle + party, agg2)
+feols(amt.in ~ nd_death | district + cycle + party, agg2)
+feols(amt.out ~ nd_death | district + cycle + party, agg2)
+
+feols(n.in ~ nd_damages | district + cycle + party, agg)
+feols(n.out ~ nd_damages | district + cycle + party, agg)
+feols(amt.in ~ nd_damages | district + cycle + party, agg)
+feols(amt.out ~ nd_damages | district + cycle + party, agg)
+
+feols(n.in ~ nd_damages | district + cycle + party, agg2)
+feols(n.out ~ nd_damages | district + cycle + party, agg2)
+feols(amt.in ~ nd_damages | district + cycle + party, agg2)
+feols(amt.out ~ nd_damages | district + cycle + party, agg2)
+
+### effect of nd on share
+
+feols(pct.out ~ nd_death | district + cycle + party, data=agg2)
+feols(pct.amt.out ~ nd_death | district + cycle + party, data=agg2)
+
+feols(pct.out ~ nd_affected | district + cycle + party, data=agg2)
+feols(pct.amt.out ~ nd_affected | district + cycle + party, data=agg2)
+
+feols(pct.out ~ nd_damages | district + cycle + party, data=agg2)
+feols(pct.amt.out ~ nd_damages | district + cycle + party, data=agg2)
+
+## effect of nd on share (limit nd to close ones)
+
+agg$close <- as.numeric(agg$close)
+agg <- agg %>% ungroup(.) %>% mutate(nd_death2 = ifelse(.$close < 300 & .$nd_death == 1, 1, 0),
+                                     nd_affect2 = ifelse(.$close < 300 & .$nd_affect == 1, 1, 0),
+                                     nd_both2 = ifelse(.$close < 300 & .$nd_both == 1, 1, 0))
+
+feols(pct.out ~ nd_death2 | district + cycle + party, data=agg)
+feols(pct.amt.out ~ nd_death2 | district + cycle + party, data=agg)
+
+feols(pct.out ~ nd_affect2 | district + cycle + party, data=agg)
+feols(pct.amt.out ~ nd_affect2 | district + cycle + party, data=agg)
+
+feols(pct.out ~ nd_both2 | district + cycle + party, data=agg)
+feols(pct.amt.out ~ nd_both2 | district + cycle + party, data=agg)
+
+
+### effect of nd on ideology
+
+# extract winner of district, cycle
+winner <- join %>% filter(p_elec_stat == "W") %>% 
+  group_by(bonica_rid, district, cycle) %>% slice(1) %>% 
+  select(cycle, bonica_rid, party, recipient_state, district, recipient_cfscore, dwnom1, dwnom2, dwdime) %>%
+  arrange(district, cycle) %>% ungroup(.)
+
+winner <- left_join(winner, try,
+                    by= c("district" = "cong",
+                          "cycle"= "year.x")) %>% 
+  mutate(nd_death = ifelse(is.na(.$death10 == T), 0, .$death10),
+         nd_affect = ifelse(is.na(.$affect10 == T), 0, .$affect10),
+         nd_both = ifelse(is.na(.$both == T), 0, .$both))
+
+# construct DV (ideology)
+winner <- winner %>% mutate(# cfscore
+                            ab.cfscore = abs(winner$recipient_cfscore), # absolute cfscore
+                            dist = case_when(.$party == 100 ~ .$recipient_cfscore - median(.$recipient_cfscore[.$party==100]), # distance from median
+                                             .$party == 200 ~ .$recipient_cfscore - median(.$recipient_cfscore[.$party==200])),
+                            # dwdime
+                            ab.dwdime = abs(.$dwdime),
+                            dist.dwdime = case_when(.$party == 100 ~ .$dwdime - median(.$dwdime[.$party==100], na.rm=T), 
+                                                    .$party == 200 ~ .$dwdime - median(.$dwdime[.$party==200], na.rm=T)),
+                            # dwnominate
+                            ab.dw1 = abs(.$dwnom1),
+                            dist.dw1 = case_when(.$party == 100 ~ .$dwnom1 - median(.$dwnom1[.$party==100], na.rm=T), 
+                                                    .$party == 200 ~ .$dwnom1 - median(.$dwnom1[.$party==200], na.rm=T))) %>%
+  mutate(ab.dist = abs(.$dist),
+         ab.dist.dwdime = abs(.$dist.dwdime),
+         ab.dist.dw1 = abs(.$dist.dw1))
+
+## analysis: effect of nd on ideology
+
+feols(ab.cfscore ~ nd_death | district + cycle + party, data=winner)
+feols(ab.dist ~ nd_death | district + cycle + party, data=winner)
+feols(ab.dwdime ~ nd_death | district + cycle + party, data=winner)
+feols(ab.dist.dwdime ~ nd_death | district + cycle + party, data=winner)
+feols(ab.dw1 ~ nd_death | district + cycle + party, data=winner)
+feols(ab.dist.dw1 ~ nd_death | district + cycle + party, data=winner)
+
+feols(ab.cfscore ~ nd_affect | district + cycle + party, data=winner)
+feols(ab.dist ~ nd_affect | district + cycle + party, data=winner)
+feols(ab.dwdime ~ nd_affect | district + cycle + party, data=winner)
+feols(ab.dist.dwdime ~ nd_affect | district + cycle + party, data=winner)
+feols(ab.dw1 ~ nd_affect | district + cycle + party, data=winner)
+feols(ab.dist.dw1 ~ nd_affect | district + cycle + party, data=winner)
+
+feols(ab.cfscore ~ nd_both | district + cycle + party, data=winner)
+feols(ab.dist ~ nd_both | district + cycle + party, data=winner)
+feols(ab.dwdime ~ nd_both | district + cycle + party, data=winner)
+feols(ab.dist.dwdime ~ nd_both | district + cycle + party, data=winner)
+feols(ab.dw1 ~ nd_both | district + cycle + party, data=winner)
+feols(ab.dist.dw1 ~ nd_both | district + cycle + party, data=winner)
+
+## filter < 300
+
+winner <- winner %>% ungroup(.) %>% mutate(close = as.numeric(close),
+                                           nd_death2 = ifelse(.$close < 300 & .$nd_death == 1, 1, 0),
+                                           nd_affect2 = ifelse(.$close < 300 & .$nd_affect == 1, 1, 0),
+                                           nd_both2 = ifelse(.$close < 300 & .$nd_both == 1, 1, 0))
+
+
+feols(ab.cfscore ~ nd_death2 | district + cycle + party, data=winner)
+feols(ab.dist ~ nd_death2 | district + cycle + party, data=winner)
+feols(ab.dwdime ~ nd_death2 | district + cycle + party, data=winner)
+feols(ab.dist.dwdime ~ nd_death2 | district + cycle + party, data=winner)
+feols(ab.dw1 ~ nd_death2 | district + cycle + party, data=winner)
+feols(ab.dist.dw1 ~ nd_death2 | district + cycle + party, data=winner)
+
+feols(ab.cfscore ~ nd_affect2 | district + cycle + party, data=winner)
+feols(ab.dist ~ nd_affect2 | district + cycle + party, data=winner)
+feols(ab.dwdime ~ nd_affect2 | district + cycle + party, data=winner)
+feols(ab.dist.dwdime ~ nd_affect2 | district + cycle + party, data=winner)
+feols(ab.dw1 ~ nd_affect2 | district + cycle + party, data=winner)
+feols(ab.dist.dw1 ~ nd_affect2 | district + cycle + party, data=winner)
+
+feols(ab.cfscore ~ nd_both2 | district + cycle + party, data=winner)
+feols(ab.dist ~ nd_both2 | district + cycle + party, data=winner)
+feols(ab.dwdime ~ nd_both2 | district + cycle + party, data=winner)
+feols(ab.dist.dwdime ~ nd_both2 | district + cycle + party, data=winner)
+feols(ab.dw1 ~ nd_both2 | district + cycle + party, data=winner)
+feols(ab.dist.dw1 ~ nd_both2 | district + cycle + party, data=winner)
+
+
+#### probabilty of winning
+
+# get primary voteshare from other datasets
+
+pri10 <- read_dta("House primary elections (1956-2010) data.dta") %>% filter(year > 1998) %>%
+  mutate(abb = state2abbr(.$state),
+         district = substr(.$stcd,3,4),
+         lname = sub("_.*", "", .$candidate),
+         party = ifelse(.$party == 0, 200, 100)) %>% 
+  mutate(cong = paste0(abb, district))
+
+pri18 <- read_dta("house_primary_2012_2018.dta") %>% filter(year < 2016) %>%
+  mutate(abb = state2abbr(.$state),
+         district = substr(.$stcd,3,4),
+         lname = sub("_.*", "", .$candidate),
+         party = ifelse(.$party == 0, 200, 100)) %>% 
+  mutate(cong = paste0(abb, district))
+
+pri_vs <- bind_rows(pri10, pri18) %>% select(year, party, candpct, winner, runoff, abb, district, lname, cong)
+
+# combine it with dime dataset
+
+cand1 <- cand %>% mutate(lname = sub(",.*", "", .$name),
+                         party = as.double(.$party)) %>% 
+  select(cycle, party, lname, district, state, recipient_cfscore, dwnom1, dwnom2, dwdime, p_elec_stat)
+
+prob2 <- left_join(pri_vs, cand1, by=c("year"="cycle",
+                                       "party"="party",
+                                       "lname"="lname",
+                                       "cong"="district")) %>% arrange(year, cong)
+
+prob <- prob2 %>% group_by(year, party, cong) %>% summarize(num = n(),
+                                                      prob_cf = sum(candpct*recipient_cfscore)/num,
+                                                      prob_dw1 = sum(candpct*dwnom1)/num,
+                                                      prob_dw2 = sum(candpct*dwnom2)/num,
+                                                      prob_dd = sum(candpct*dwdime)/num) %>% 
+  arrange(year, cong, party) %>% ungroup(.)
+
+
+prob_anl <- left_join(prob, try,
+                    by= c("cong" = "cong",
+                          "year"= "year.x")) %>% 
+  mutate(nd_death = ifelse(is.na(.$death10 == T), 0, .$death10),
+         nd_affect = ifelse(is.na(.$affect10 == T), 0, .$affect10),
+         nd_both = ifelse(is.na(.$both == T), 0, .$both)) %>% 
+  mutate(close = as.numeric(.$close),
+         nd_death2 = ifelse(.$close < 300 & .$nd_death == 1, 1, 0),
+         nd_affect2 = ifelse(.$close < 300 & .$nd_affect == 1, 1, 0),
+         nd_both2 = ifelse(.$close < 300 & .$nd_both == 1, 1, 0))
+
+# analysis
+
+feols(prob_cf ~ nd_death | cong + year + party, data=prob_anl)
+feols(prob_dw1 ~ nd_death | cong + year + party, data=prob_anl)
+feols(prob_dw2 ~ nd_death | cong + year + party, data=prob_anl)
+feols(prob_dd ~ nd_death | cong + year + party, data=prob_anl)
+
+feols(prob_cf ~ nd_affect | cong + year + party, data=prob_anl)
+feols(prob_dw1 ~ nd_affect | cong + year + party, data=prob_anl)
+feols(prob_dw2 ~ nd_affect | cong + year + party, data=prob_anl)
+feols(prob_dd ~ nd_affect | cong + year + party, data=prob_anl) #*
+
+feols(prob_cf ~ nd_both | cong + year + party, data=prob_anl) #*
+feols(prob_dw1 ~ nd_both | cong + year + party, data=prob_anl)
+feols(prob_dw2 ~ nd_both | cong + year + party, data=prob_anl)
+feols(prob_dd ~ nd_both | cong + year + party, data=prob_anl)
+
+# filtering <300
+
+feols(prob_cf ~ nd_death2 | cong + year + party, data=prob_anl)
+feols(prob_dw1 ~ nd_death2 | cong + year + party, data=prob_anl)
+feols(prob_dw2 ~ nd_death2 | cong + year + party, data=prob_anl)
+feols(prob_dd ~ nd_death2 | cong + year + party, data=prob_anl)
+
+feols(prob_cf ~ nd_affect2 | cong + year + party, data=prob_anl)
+feols(prob_dw1 ~ nd_affect2 | cong + year + party, data=prob_anl)
+feols(prob_dw2 ~ nd_affect2 | cong + year + party, data=prob_anl)
+feols(prob_dd ~ nd_affect2 | cong + year + party, data=prob_anl) 
+
+feols(prob_cf ~ nd_both2 | cong + year + party, data=prob_anl) 
+feols(prob_dw1 ~ nd_both2 | cong + year + party, data=prob_anl)
+feols(prob_dw2 ~ nd_both2 | cong + year + party, data=prob_anl)
+feols(prob_dd ~ nd_both2 | cong + year + party, data=prob_anl)
+
+
+# exclude NDs that happened too early
+# make a dummy variable for very close/close/far to measure heterogenous treatment effect
+
+
+#### heterogenous effect of timing
+feols(ab.cfscore ~ close | district + cycle + party, data = winner %>% filter(nd_death == 1))
+feols(ab.cfscore ~ close | district + cycle + party, data = winner %>% filter(nd_death == 1) %>% drop_na(c("ab.cfscore","ab.dwdime","ab.dw1")))
+feols(ab.cfscore ~ close | district + cycle + party, data = winner %>% filter(nd_death2 == 1))
+feols(ab.cfscore ~ close | district + cycle + party, data = winner %>% filter(nd_death2 == 1) %>% drop_na(c("ab.cfscore","ab.dwdime","ab.dw1")))
+
+feols(ab.dist ~ close | district + cycle + party, data = winner %>% filter(nd_death == 1))
+feols(ab.dist ~ close | district + cycle + party, data = winner %>% filter(nd_death == 1) %>% drop_na(c("ab.dist","ab.dist.dwdime","ab.dist.dw1")))
+feols(ab.dist ~ close | district + cycle + party, data = winner %>% filter(nd_death2 == 1))
+feols(ab.dist ~ close | district + cycle + party, data = winner %>% filter(nd_death2 == 1) %>% drop_na(c("ab.dist","ab.dist.dwdime","ab.dist.dw1")))
+
+
+feols(ab.dwdime ~ close | district + cycle + party, data = winner %>% filter(nd_death == 1))
+feols(ab.dwdime ~ close | district + cycle + party, data = winner %>% filter(nd_death == 1) %>% drop_na(c("ab.cfscore","ab.dwdime","ab.dw1")))
+feols(ab.dwdime ~ close | district + cycle + party, data = winner %>% filter(nd_death2 == 1))
+feols(ab.dwdime ~ close | district + cycle + party, data = winner %>% filter(nd_death2 == 1) %>% drop_na(c("ab.cfscore","ab.dwdime","ab.dw1")))
+
+feols(ab.dist.dwdime ~ close | district + cycle + party, data = winner %>% filter(nd_death == 1))
+feols(ab.dist.dwdime ~ close | district + cycle + party, data = winner %>% filter(nd_death == 1) %>% drop_na(c("ab.dist","ab.dist.dwdime","ab.dist.dw1")))
+feols(ab.dist.dwdime ~ close | district + cycle + party, data = winner %>% filter(nd_death2 == 1))
+feols(ab.dist.dwdime ~ close | district + cycle + party, data = winner %>% filter(nd_death2 == 1) %>% drop_na(c("ab.dist","ab.dist.dwdime","ab.dist.dw1")))
+
+
+feols(ab.dw1 ~ close | district + cycle + party, data = winner %>% filter(nd_death == 1))
+feols(ab.dw1 ~ close | district + cycle + party, data = winner %>% filter(nd_death == 1) %>% drop_na(c("ab.cfscore","ab.dwdime","ab.dw1")))
+feols(ab.dw1 ~ close | district + cycle + party, data = winner %>% filter(nd_death2 == 1))
+feols(ab.dw1 ~ close | district + cycle + party, data = winner %>% filter(nd_death2 == 1) %>% drop_na(c("ab.cfscore","ab.dwdime","ab.dw1")))
+
+
+feols(ab.dist.dw1 ~ close | district + cycle + party, data = winner %>% filter(nd_death == 1))
+feols(ab.dist.dw1 ~ close | district + cycle + party, data = winner %>% filter(nd_death == 1) %>% drop_na(c("ab.dist","ab.dist.dwdime","ab.dist.dw1")))
+feols(ab.dist.dw1 ~ close | district + cycle + party, data = winner %>% filter(nd_death2 == 1))
+feols(ab.dist.dw1 ~ close | district + cycle + party, data = winner %>% filter(nd_death2 == 1) %>% drop_na(c("ab.dist","ab.dist.dwdime","ab.dist.dw1")))
+
+
+feols(ab.cfscore ~ close | district + cycle + party, data = winner %>% filter(nd_affect2 == 1))
+feols(ab.dist ~ close | district + cycle + party, data = winner %>% filter(nd_affect2 == 1))
+feols(ab.dwdime ~ close | district + cycle + party, data = winner %>% filter(nd_affect2 == 1))
+feols(ab.dist.dwdime ~ close | district + cycle + party, data = winner %>% filter(nd_affect2 == 1))
+feols(ab.dw1 ~ close | district + cycle + party, data = winner %>% filter(nd_affect2 == 1))
+feols(ab.dist.dw1 ~ close | district + cycle + party, data = winner %>% filter(nd_affect2 == 1))
+
+feols(ab.cfscore ~ close | district + cycle + party, data = winner %>% filter(nd_both2 == 1))
+feols(ab.dist ~ close | district + cycle + party, data = winner %>% filter(nd_both2 == 1))
+feols(ab.dwdime ~ close | district + cycle + party, data = winner %>% filter(nd_both2 == 1))
+feols(ab.dist.dwdime ~ close | district + cycle + party, data = winner %>% filter(nd_both2 == 1))
+feols(ab.dw1 ~ close | district + cycle + party, data = winner %>% filter(nd_both2 == 1))
+feols(ab.dist.dw1 ~ close | district + cycle + party, data = winner %>% filter(nd_both2 == 1))
+
+
+#### RESULTS
+library(broom)
+library(dotwhisker)
+
+# nd --> share
+nd.out1 <- feols(pct.out ~ nd_both2 | district + cycle + party, data=agg)
+nd.out2 <- feols(pct.amt.out ~ nd_both2 | district + cycle + party, data=agg)
+
+m1 <- tidy(nd.out1) %>% mutate(model = "Model 1")
+m2 <- tidy(nd.out2) %>% mutate(model = "Model 2")
+
+share <- rbind(m1, m2)
+
+dwplot(share) %>% 
+  relabel_predictors(c(nd_both2 = "Disaster")) +
+  xlab("") + ylab("") +
+  geom_vline(xintercept=0, linetype=2) +
+  ggtitle("") +
+  scale_color_manual(name = "",
+                     labels = c("by amount", "by number"),
+                     values=c("cadetblue","violetred")) +
+  theme(legend.position = "bottom") 
+
+ggsave("plot1.png", plot = last_plot(),
+       width = 6, height = 4)
+  
+etable(nd.out1, nd.out2,  
+       #title = "", 
+       fitstat = c("n"),
+       tex = TRUE, style.tex = style.tex("aer",tabular="*"),
+       dict=c(nd = "Disaster", 
+              pct.out = "Out-Donors", pct.amt.out = "Out-Donations"),
+       fixef.group = list("District FE"="district",
+                          "Cycle FE"="cycle",
+                          "Party FE"="party"))  
+
+# report all
+
+share_death1 <- feols(pct.out ~ nd_death2 | district + cycle + party, data=agg)
+share_death2 <- feols(pct.amt.out ~ nd_death2 | district + cycle + party, data=agg)
+share_affect1 <- feols(pct.out ~ nd_affect2 | district + cycle + party, data=agg)
+share_affect2 <- feols(pct.amt.out ~ nd_affect2 | district + cycle + party, data=agg)
+share_both1 <- feols(pct.out ~ nd_both2 | district + cycle + party, data=agg)
+share_both2 <- feols(pct.amt.out ~ nd_both2 | district + cycle + party, data=agg)
+
+m1 <- tidy(share_death1) %>% mutate(model = "by number")
+m2 <- tidy(share_death2) %>% mutate(model = "by amount")
+m3 <- tidy(share_affect1) %>% mutate(model = "by number")
+m4 <- tidy(share_affect2) %>% mutate(model = "by amount")
+m5 <- tidy(share_both1) %>% mutate(model = "by number")
+m6 <- tidy(share_both2) %>% mutate(model = "by amount")
+
+dwplot(rbind(m1, m2, m3, m4, m5, m6)) %>% 
+  relabel_predictors(c(nd_death2 = "Death",
+                       nd_affect2 = "Affected",
+                       nd_both2 = "Both")) +
+  xlab("Coefficient Estimate") + ylab("") +
+  geom_vline(xintercept=0, linetype=2) +
+  ggtitle("") +
+  scale_color_manual(name = "",
+                     values=c("cadetblue","violetred")) +
+  theme(legend.position = "bottom") 
+
+ggsave("ndshare.pdf", plot = last_plot(),
+       width = 6, height = 4)
+
+etable(share_death1, share_affect1, share_both1,  
+       #title = "", 
+       fitstat = c("n"),
+       signifCode = c("***"=0.001, "**"=0.01, "*"=0.05),
+       tex = TRUE, style.tex = style.tex("aer",tabular="*"),
+       dict=c(nd_death2 = "Death", nd_affect2 = "Affected", nd_both2 = "Both",
+              pct.out = "Out-Donors"),
+       fixef.group = list("District FE"="district",
+                          "Cycle FE"="cycle",
+                          "Party FE"="party"))  
+
+etable(share_death2, share_affect2, share_both2,  
+       #title = "", 
+       fitstat = c("n"),
+       signifCode = c("***"=0.001, "**"=0.01, "*"=0.05),
+       tex = TRUE, style.tex = style.tex("aer",tabular="*"),
+       dict=c(nd_death2 = "Death", nd_affect2 = "Affected", nd_both2 = "Both",
+              pct.amt.out = "Out-Donations"),
+       fixef.group = list("District FE"="district",
+                          "Cycle FE"="cycle",
+                          "Party FE"="party")) 
+
+
+# nd --> ideology
+cf1 <- feols(ab.cfscore ~ nd_both2 | district + cycle + party, data=winner)
+cf2 <- feols(ab.dist ~ nd_both2 | district + cycle + party, data=winner)
+dime1 <- feols(ab.dwdime ~ nd_both2 | district + cycle + party, data=winner)
+dime2 <- feols(ab.dist.dwdime ~ nd_both2 | district + cycle + party, data=winner)
+dw1 <- feols(ab.dw1 ~ nd_both2 | district + cycle + party, data=winner)
+dw2 <- feols(ab.dist.dw1 ~ nd_both2 | district + cycle + party, data=winner)
+
+m3 <- tidy(cf1) %>% mutate(model = "absolute score")
+m4 <- tidy(cf2) %>% mutate(model = "absolute distance from median")
+m7 <- tidy(dw1) %>% mutate(model = "absolute score")
+m8 <- tidy(dw2) %>% mutate(model = "absolute distance from median")
+
+dwplot(rbind(m3, m4)) %>% 
+  relabel_predictors(c(nd_both2 = "Disaster")) +
+  xlab("") + ylab("") +
+  geom_vline(xintercept=0, linetype=2) +
+  ggtitle("") +
+  scale_color_manual(name = "",
+                     values=c("cadetblue","violetred")) +
+  theme(legend.position = "bottom") 
+
+dwplot(rbind(m7, m8)) %>% 
+  relabel_predictors(c(nd_both2 = "Disaster")) +
+  xlab("") + ylab("") +
+  geom_vline(xintercept=0, linetype=2) +
+  ggtitle("")  +
+  scale_color_manual(name = "",
+                     values=c("cadetblue","violetred")) +
+  theme(legend.position = "bottom") 
+
+etable(cf1, cf2, dw1, dw2,
+       #title = "", 
+       fitstat = c("n"),
+       tex = TRUE, style.tex = style.tex("aer",tabular="*"),
+       dict=c(nd_both2 = "Disaster", 
+              cf1 = "Abs.CF", cf2 = "Dist.CF",
+              dw1 = "Abs.DW", dw2 = "Dist.DW"),
+       fixef.group = list("District FE"="district",
+                          "Cycle FE"="cycle",
+                          "Party FE"="party")) 
+
+
+# report all
+
+ideo_death1 <- feols(ab.cfscore ~ nd_death2 | district + cycle + party, data=winner)
+ideo_death2 <- feols(ab.dist ~ nd_death2 | district + cycle + party, data=winner)
+ideo_death3 <- feols(ab.dw1 ~ nd_death2 | district + cycle + party, data=winner)
+ideo_death4 <- feols(ab.dist.dw1 ~ nd_death2 | district + cycle + party, data=winner)
+
+ideo_affect1 <- feols(ab.cfscore ~ nd_affect2 | district + cycle + party, data=winner)
+ideo_affect2 <- feols(ab.dist ~ nd_affect2 | district + cycle + party, data=winner)
+ideo_affect3 <- feols(ab.dw1 ~ nd_affect2 | district + cycle + party, data=winner)
+ideo_affect4 <- feols(ab.dist.dw1 ~ nd_affect2 | district + cycle + party, data=winner)
+
+ideo_both1 <- feols(ab.cfscore ~ nd_both2 | district + cycle + party, data=winner)
+ideo_both2 <- feols(ab.dist ~ nd_both2 | district + cycle + party, data=winner)
+ideo_both3 <- feols(ab.dw1 ~ nd_both2 | district + cycle + party, data=winner)
+ideo_both4 <- feols(ab.dist.dw1 ~ nd_both2 | district + cycle + party, data=winner)
+
+i1 <- tidy(ideo_death1) %>% mutate(model = "CF abs")
+i2 <- tidy(ideo_death2) %>% mutate(model = "CF abs dist")
+i3 <- tidy(ideo_death3) %>% mutate(model = "DW abs")
+i4 <- tidy(ideo_death4) %>% mutate(model = "DW abs dist")
+
+i5 <- tidy(ideo_affect1) %>% mutate(model = "CF abs")
+i6 <- tidy(ideo_affect2) %>% mutate(model = "CF abs dist")
+i7 <- tidy(ideo_affect3) %>% mutate(model = "DW abs")
+i8 <- tidy(ideo_affect4) %>% mutate(model = "DW abs dist")
+
+i9 <- tidy(ideo_both1) %>% mutate(model = "CF abs")
+i10 <- tidy(ideo_both2) %>% mutate(model = "CF abs dist")
+i11 <- tidy(ideo_both3) %>% mutate(model = "DW abs")
+i12 <- tidy(ideo_both4) %>% mutate(model = "DW abs dist")
+
+dwplot(rbind(i1, i2, i3, i4, i5, i6, i7, i8, i9, i10, i11, i12)) %>% 
+  relabel_predictors(c(nd_death2 = "Death",
+                       nd_affect2 = "Affected",
+                       nd_both2 = "Both")) +
+  xlab("Coefficient Estimate") + ylab("") +
+  geom_vline(xintercept=0, linetype=2) +
+  ggtitle("")  +
+  scale_color_manual(name = "",
+                     values=c("cadetblue3", "cadetblue","violetred", "violetred4")) +
+  theme(legend.position = "bottom") 
+
+ggsave("ndideo.pdf", plot = last_plot(),
+       width = 6, height = 4)
+
+etable(ideo_death1, ideo_death2, ideo_death3, ideo_death4,
+       ideo_affect1, ideo_affect2, ideo_affect3, ideo_affect4,
+       ideo_both1, ideo_both2, ideo_both3, ideo_both4,
+       #title = "", 
+       fitstat = c("n"),
+       tex = TRUE, style.tex = style.tex("aer",tabular="*"),
+       dict=c(nd_death2 = "Death", nd_affect2 = "Affected", nd_both2 = "Both", 
+              ideo_death1 = "Abs.CF", ideo_death2 = "Dist.CF", ideo_death3 = "Abs.DW", ideo_death4 = "Dist.DW",
+              ideo_affect1 = "Abs.CF", ideo_affect2 = "Dist.CF", ideo_affect3 = "Abs.DW", ideo_affect4 = "Dist.DW",
+              ideo_both1 = "Abs.CF", ideo_both2 = "Dist.CF", ideo_both3 = "Abs.DW", ideo_both4 = "Dist.DW"),
+       fixef.group = list("District FE"="district",
+                          "Cycle FE"="cycle",
+                          "Party FE"="party"))
+  
+etable(ideo_death1, ideo_affect1, ideo_both1, 
+       #title = "", 
+       fitstat = c("n"),
+       signifCode = c("***"=0.001, "**"=0.01, "*"=0.05),
+       tex = TRUE, style.tex = style.tex("aer",tabular="*"),
+       dict=c(nd_death2 = "Death", nd_affect2 = "Affected", nd_both2 = "Both", 
+              ab.cfscore = "Abs.CF"),
+       fixef.group = list("District FE"="district",
+                          "Cycle FE"="cycle",
+                          "Party FE"="party"))
+
+etable(ideo_death2, ideo_affect2, ideo_both2, 
+       #title = "", 
+       fitstat = c("n"),
+       signifCode = c("***"=0.001, "**"=0.01, "*"=0.05),
+       tex = TRUE, style.tex = style.tex("aer",tabular="*"),
+       dict=c(nd_death2 = "Death", nd_affect2 = "Affected", nd_both2 = "Both", 
+              ab.dist = "Abs.CF Dist"),
+       fixef.group = list("District FE"="district",
+                          "Cycle FE"="cycle",
+                          "Party FE"="party"))
+
+etable(ideo_death3, ideo_affect3, ideo_both3, 
+       #title = "", 
+       fitstat = c("n"),
+       signifCode = c("***"=0.001, "**"=0.01, "*"=0.05),
+       tex = TRUE, style.tex = style.tex("aer",tabular="*"),
+       dict=c(nd_death2 = "Death", nd_affect2 = "Affected", nd_both2 = "Both", 
+              ab.dw1 = "Abs.DW"),
+       fixef.group = list("District FE"="district",
+                          "Cycle FE"="cycle",
+                          "Party FE"="party"))
+
+etable(ideo_death4, ideo_affect4, ideo_both4, 
+       #title = "", 
+       fitstat = c("n"),
+       signifCode = c("***"=0.001, "**"=0.01, "*"=0.05),
+       tex = TRUE, style.tex = style.tex("aer",tabular="*"),
+       dict=c(nd_death2 = "Death", nd_affect2 = "Affected", nd_both2 = "Both", 
+              ab.dist.dw1 = "Abs.DW Dist"),
+       fixef.group = list("District FE"="district",
+                          "Cycle FE"="cycle",
+                          "Party FE"="party"))
+
+# nd --> prob 
+
+pcf <- feols(prob_cf ~ nd_both2 | cong + year + party, data=prob_anl) 
+pdw <- feols(prob_dw2 ~ nd_both2 | cong + year + party, data=prob_anl)
+
+m9 <- tidy(pcf) %>% mutate(model = "CF-score")
+m10 <- tidy(pdw) %>% mutate(model = "DW-Nominate")
+
+dwplot(rbind(m9, m10)) %>% 
+  relabel_predictors(c(nd_both2 = "Disaster")) +
+  xlab("") + ylab("") +
+  geom_vline(xintercept=0, linetype=2) +
+  ggtitle("") +
+  scale_color_manual(name = "",
+                     values=c("cadetblue","violetred")) +
+  theme(legend.position = "bottom") 
+
+etable(pcf, pdw,
+       #title = "", 
+       fitstat = c("n"),
+       tex = TRUE, style.tex = style.tex("aer",tabular="*"),
+       dict=c(nd_both2 = "Disaster", 
+              pcf = "CF-score", pdw = "DW-Nominate"),
+       fixef.group = list("District FE"="cong",
+                          "Cycle FE"="year",
+                          "Party FE"="party"))
+
+# report all
+
+prob_death1 <- feols(prob_cf ~ nd_death2 | cong + year + party, data=prob_anl)
+prob_death2 <- feols(prob_dw2 ~ nd_death2 | cong + year + party, data=prob_anl)
+
+prob_affect1 <- feols(prob_cf ~ nd_affect2 | cong + year + party, data=prob_anl)
+prob_affect2 <- feols(prob_dw2 ~ nd_affect2 | cong + year + party, data=prob_anl)
+
+prob_both1 <- feols(prob_cf ~ nd_both2 | cong + year + party, data=prob_anl) 
+prob_both2 <- feols(prob_dw2 ~ nd_both2 | cong + year + party, data=prob_anl)
+
+p1 <- tidy(prob_death1) %>% mutate(model = "CF-Score")
+p2 <- tidy(prob_death2) %>% mutate(model = "DW-Nominate")
+p3 <- tidy(prob_affect1) %>% mutate(model = "CF-Score")
+p4 <- tidy(prob_affect2) %>% mutate(model = "DW-Nominate")
+p5 <- tidy(prob_both1) %>% mutate(model = "CF-Score")
+p6 <- tidy(prob_both2) %>% mutate(model = "DW-Nominate")
+
+dwplot(rbind(p1, p2, p3, p4, p5, p6)) %>% 
+  relabel_predictors(c(nd_death2 = "Death",
+                       nd_affect2 = "Affected",
+                       nd_both2 = "Both")) +
+  xlab("") + ylab("") +
+  geom_vline(xintercept=0, linetype=2) +
+  ggtitle("")  +
+  scale_color_manual(name = "",
+                     values=c("cadetblue","violetred")) +
+  theme(legend.position = "bottom") 
+
+ggsave("ndprob.png", plot = last_plot(),
+       width = 6, height = 4)
+
+
+etable(prob_death1, prob_death2, prob_affect1, prob_affect2, prob_both1, prob_both2,
+       #title = "", 
+       fitstat = c("n"),
+       tex = TRUE, style.tex = style.tex("aer",tabular="*"),
+       dict=c(nd_death2 = "Death", nd_affect2 = "Affected", nd_both2 = "Both", 
+              prob_cf = "CF", prob_dw2 = "DW"),
+       fixef.group = list("District FE"="cong",
+                          "Cycle FE"="year",
+                          "Party FE"="party"))
+
+
+# take absolute
+
+# retry with yearly medians
+
+prob_a <- prob2 %>% mutate(
+  cf_median = case_when(.$party == 100 & .$year == 2000 ~ median(.$recipient_cfscore[.$party == 100 & .$year == 2000], na.rm=T),
+                       .$party == 100 & .$year == 2002 ~ median(.$recipient_cfscore[.$party == 100 & .$year == 2002], na.rm=T),
+                       .$party == 100 & .$year == 2004 ~ median(.$recipient_cfscore[.$party == 100 & .$year == 2004], na.rm=T),
+                       .$party == 100 & .$year == 2006 ~ median(.$recipient_cfscore[.$party == 100 & .$year == 2006], na.rm=T),
+                       .$party == 100 & .$year == 2008 ~ median(.$recipient_cfscore[.$party == 100 & .$year == 2008], na.rm=T),
+                       .$party == 100 & .$year == 2010 ~ median(.$recipient_cfscore[.$party == 100 & .$year == 2010], na.rm=T),
+                       .$party == 100 & .$year == 2012 ~ median(.$recipient_cfscore[.$party == 100 & .$year == 2012], na.rm=T),
+                       .$party == 100 & .$year == 2014 ~ median(.$recipient_cfscore[.$party == 100 & .$year == 2014], na.rm=T),
+                       .$party == 200 & .$year == 2000 ~ median(.$recipient_cfscore[.$party == 200 & .$year == 2000], na.rm=T),
+                       .$party == 200 & .$year == 2002 ~ median(.$recipient_cfscore[.$party == 200 & .$year == 2002], na.rm=T),
+                       .$party == 200 & .$year == 2004 ~ median(.$recipient_cfscore[.$party == 200 & .$year == 2004], na.rm=T),
+                       .$party == 200 & .$year == 2006 ~ median(.$recipient_cfscore[.$party == 200 & .$year == 2006], na.rm=T),
+                       .$party == 200 & .$year == 2008 ~ median(.$recipient_cfscore[.$party == 200 & .$year == 2008], na.rm=T),
+                       .$party == 200 & .$year == 2010 ~ median(.$recipient_cfscore[.$party == 200 & .$year == 2010], na.rm=T),
+                       .$party == 200 & .$year == 2012 ~ median(.$recipient_cfscore[.$party == 200 & .$year == 2012], na.rm=T),
+                       .$party == 200 & .$year == 2014 ~ median(.$recipient_cfscore[.$party == 200 & .$year == 2014], na.rm=T)),
+      dw1_median = case_when(.$party == 100 & .$year == 2000 ~ median(.$dwnom1[.$party == 100 & .$year == 2000], na.rm=T),
+                             .$party == 100 & .$year == 2002 ~ median(.$dwnom1[.$party == 100 & .$year == 2002], na.rm=T),
+                             .$party == 100 & .$year == 2004 ~ median(.$dwnom1[.$party == 100 & .$year == 2004], na.rm=T),
+                             .$party == 100 & .$year == 2006 ~ median(.$dwnom1[.$party == 100 & .$year == 2006], na.rm=T),
+                             .$party == 100 & .$year == 2008 ~ median(.$dwnom1[.$party == 100 & .$year == 2008], na.rm=T),
+                             .$party == 100 & .$year == 2010 ~ median(.$dwnom1[.$party == 100 & .$year == 2010], na.rm=T),
+                             .$party == 100 & .$year == 2012 ~ median(.$dwnom1[.$party == 100 & .$year == 2012], na.rm=T),
+                             .$party == 100 & .$year == 2014 ~ median(.$dwnom1[.$party == 100 & .$year == 2014], na.rm=T),
+                             .$party == 200 & .$year == 2000 ~ median(.$dwnom1[.$party == 200 & .$year == 2000], na.rm=T),
+                             .$party == 200 & .$year == 2002 ~ median(.$dwnom1[.$party == 200 & .$year == 2002], na.rm=T),
+                             .$party == 200 & .$year == 2004 ~ median(.$dwnom1[.$party == 200 & .$year == 2004], na.rm=T),
+                             .$party == 200 & .$year == 2006 ~ median(.$dwnom1[.$party == 200 & .$year == 2006], na.rm=T),
+                             .$party == 200 & .$year == 2008 ~ median(.$dwnom1[.$party == 200 & .$year == 2008], na.rm=T),
+                             .$party == 200 & .$year == 2010 ~ median(.$dwnom1[.$party == 200 & .$year == 2010], na.rm=T),
+                             .$party == 200 & .$year == 2012 ~ median(.$dwnom1[.$party == 200 & .$year == 2012], na.rm=T),
+                             .$party == 200 & .$year == 2014 ~ median(.$dwnom1[.$party == 200 & .$year == 2014], na.rm=T)),
+      dw2_median = case_when(.$party == 100 & .$year == 2000 ~ median(.$dwnom2[.$party == 100 & .$year == 2000], na.rm=T),
+                             .$party == 100 & .$year == 2002 ~ median(.$dwnom2[.$party == 100 & .$year == 2002], na.rm=T),
+                             .$party == 100 & .$year == 2004 ~ median(.$dwnom2[.$party == 100 & .$year == 2004], na.rm=T),
+                             .$party == 100 & .$year == 2006 ~ median(.$dwnom2[.$party == 100 & .$year == 2006], na.rm=T),
+                             .$party == 100 & .$year == 2008 ~ median(.$dwnom2[.$party == 100 & .$year == 2008], na.rm=T),
+                             .$party == 100 & .$year == 2010 ~ median(.$dwnom2[.$party == 100 & .$year == 2010], na.rm=T),
+                             .$party == 100 & .$year == 2012 ~ median(.$dwnom2[.$party == 100 & .$year == 2012], na.rm=T),
+                             .$party == 100 & .$year == 2014 ~ median(.$dwnom2[.$party == 100 & .$year == 2014], na.rm=T),
+                             .$party == 200 & .$year == 2000 ~ median(.$dwnom2[.$party == 200 & .$year == 2000], na.rm=T),
+                             .$party == 200 & .$year == 2002 ~ median(.$dwnom2[.$party == 200 & .$year == 2002], na.rm=T),
+                             .$party == 200 & .$year == 2004 ~ median(.$dwnom2[.$party == 200 & .$year == 2004], na.rm=T),
+                             .$party == 200 & .$year == 2006 ~ median(.$dwnom2[.$party == 200 & .$year == 2006], na.rm=T),
+                             .$party == 200 & .$year == 2008 ~ median(.$dwnom2[.$party == 200 & .$year == 2008], na.rm=T),
+                             .$party == 200 & .$year == 2010 ~ median(.$dwnom2[.$party == 200 & .$year == 2010], na.rm=T),
+                             .$party == 200 & .$year == 2012 ~ median(.$dwnom2[.$party == 200 & .$year == 2012], na.rm=T),
+                             .$party == 200 & .$year == 2014 ~ median(.$dwnom2[.$party == 200 & .$year == 2014], na.rm=T)),
+      dd_median = case_when(.$party == 100 & .$year == 2000 ~ median(.$dwdime[.$party == 100 & .$year == 2000], na.rm=T),
+                             .$party == 100 & .$year == 2002 ~ median(.$dwdime[.$party == 100 & .$year == 2002], na.rm=T),
+                             .$party == 100 & .$year == 2004 ~ median(.$dwdime[.$party == 100 & .$year == 2004], na.rm=T),
+                             .$party == 100 & .$year == 2006 ~ median(.$dwdime[.$party == 100 & .$year == 2006], na.rm=T),
+                             .$party == 100 & .$year == 2008 ~ median(.$dwdime[.$party == 100 & .$year == 2008], na.rm=T),
+                             .$party == 100 & .$year == 2010 ~ median(.$dwdime[.$party == 100 & .$year == 2010], na.rm=T),
+                             .$party == 100 & .$year == 2012 ~ median(.$dwdime[.$party == 100 & .$year == 2012], na.rm=T),
+                             .$party == 100 & .$year == 2014 ~ median(.$dwdime[.$party == 100 & .$year == 2014], na.rm=T),
+                             .$party == 200 & .$year == 2000 ~ median(.$dwdime[.$party == 200 & .$year == 2000], na.rm=T),
+                             .$party == 200 & .$year == 2002 ~ median(.$dwdime[.$party == 200 & .$year == 2002], na.rm=T),
+                             .$party == 200 & .$year == 2004 ~ median(.$dwdime[.$party == 200 & .$year == 2004], na.rm=T),
+                             .$party == 200 & .$year == 2006 ~ median(.$dwdime[.$party == 200 & .$year == 2006], na.rm=T),
+                             .$party == 200 & .$year == 2008 ~ median(.$dwdime[.$party == 200 & .$year == 2008], na.rm=T),
+                             .$party == 200 & .$year == 2010 ~ median(.$dwdime[.$party == 200 & .$year == 2010], na.rm=T),
+                             .$party == 200 & .$year == 2012 ~ median(.$dwdime[.$party == 200 & .$year == 2012], na.rm=T),
+                             .$party == 200 & .$year == 2014 ~ median(.$dwdime[.$party == 200 & .$year == 2014], na.rm=T)))
+
+prob_b <- prob_a %>% mutate(cf_dist = abs(.$recipient_cfscore-.$cf_median),
+                            dw1_dist = abs(.$dwnom1-.$dw1_median),
+                            dw2_dist = abs(.$dwnom2-.$dw2_median),
+                            dd_dist = abs(.$dwdime-.$dd_median))
+
+prob_c <- prob_b %>% group_by(year, party, cong) %>% summarize(num=n(),
+                                                               prob_cf = sum(candpct*cf_dist)/num,
+                                                               prob_dw1 = sum(candpct*dw1_dist)/num,
+                                                               prob_dw2 = sum(candpct*dw2_dist)/num,
+                                                               prob_dd = sum(candpct*dd_dist)/num,
+                                                               ab_cf = sum(candpct*abs(recipient_cfscore))/num,
+                                                               ab_dw1 = sum(candpct*abs(dwnom1))/num,
+                                                               ab_dw2 = sum(candpct*abs(dwnom2))/num,
+                                                               ab_dd = sum(candpct*abs(dwdime))/num,) %>% ungroup(.)
+
+prob_anl3 <- left_join(prob_c, try,
+                       by= c("cong" = "cong",
+                             "year"= "year.x")) %>% 
+  mutate(nd_death = ifelse(is.na(.$death10 == T), 0, .$death10),
+         nd_affect = ifelse(is.na(.$affect10 == T), 0, .$affect10),
+         nd_both = ifelse(is.na(.$both == T), 0, .$both)) %>% 
+  mutate(close = as.numeric(.$close),
+         nd_death2 = ifelse(.$close < 300 & .$nd_death == 1, 1, 0),
+         nd_affect2 = ifelse(.$close < 300 & .$nd_affect == 1, 1, 0),
+         nd_both2 = ifelse(.$close < 300 & .$nd_both == 1, 1, 0))
+
+# distance from med
+feols(prob_cf ~ nd_death2 | cong + year + party, data=prob_anl3)
+feols(prob_dw1 ~ nd_death2 | cong + year + party, data=prob_anl3) #*
+feols(prob_dw2 ~ nd_death2 | cong + year + party, data=prob_anl3)
+feols(prob_dd ~ nd_death2 | cong + year + party, data=prob_anl3) #*
+
+feols(prob_cf ~ nd_affect2 | cong + year + party, data=prob_anl3)
+feols(prob_dw1 ~ nd_affect2 | cong + year + party, data=prob_anl3) #*
+feols(prob_dw2 ~ nd_affect2 | cong + year + party, data=prob_anl3)
+feols(prob_dd ~ nd_affect2 | cong + year + party, data=prob_anl3)
+
+feols(prob_cf ~ nd_both2 | cong + year + party, data=prob_anl3)
+feols(prob_dw1 ~ nd_both2 | cong + year + party, data=prob_anl3) #*
+feols(prob_dw2 ~ nd_both2 | cong + year + party, data=prob_anl3)
+feols(prob_dd ~ nd_both2 | cong + year + party, data=prob_anl3) #*
+
+# absolute
+feols(ab_cf ~ nd_death2 | cong + year + party, data=prob_anl3)
+feols(ab_dw1 ~ nd_death2 | cong + year + party, data=prob_anl3) #* but neg
+feols(ab_dw2 ~ nd_death2 | cong + year + party, data=prob_anl3)
+feols(ab_dd ~ nd_death2 | cong + year + party, data=prob_anl3) 
+
+feols(ab_cf ~ nd_affect2 | cong + year + party, data=prob_anl3)
+feols(ab_dw1 ~ nd_affect2 | cong + year + party, data=prob_anl3) #* but neg
+feols(ab_dw2 ~ nd_affect2 | cong + year + party, data=prob_anl3)
+feols(ab_dd ~ nd_affect2 | cong + year + party, data=prob_anl3)
+
+feols(ab_cf ~ nd_both2 | cong + year + party, data=prob_anl3)
+feols(ab_dw1 ~ nd_both2 | cong + year + party, data=prob_anl3) #* but neg
+feols(ab_dw2 ~ nd_both2 | cong + year + party, data=prob_anl3)
+feols(ab_dd ~ nd_both2 | cong + year + party, data=prob_anl3)
+
+
+
+###
+
+prob2 <- prob2 %>% mutate(cf_dist = case_when(.$party == 100 ~ .$recipient_cfscore - median(.$recipient_cfscore[.$party == 100], na.rm=T),
+                                           .$party == 200 ~ .$recipient_cfscore - median(prob2$recipient_cfscore[prob2$party == 200], na.rm=T)),
+                          dw1_dist = case_when(.$party == 100 ~ .$dwnom1 - median(.$dwnom1[.$party == 100], na.rm=T),
+                                               .$party == 200 ~ .$dwnom1 - median(prob2$dwnom1[prob2$party == 200], na.rm=T)),
+                          dw2_dist = case_when(.$party == 100 ~ .$dwnom2 - median(.$dwnom2[.$party == 100], na.rm=T),
+                                               .$party == 200 ~ .$dwnom2 - median(prob2$dwnom2[prob2$party == 200], na.rm=T)),
+                          dd_dist = case_when(.$party == 100 ~ .$dwdime - median(.$dwdime[.$party == 100], na.rm=T),
+                                               .$party == 200 ~ .$dwdime - median(prob2$dwdime[prob2$party == 200], na.rm=T))
+)
+
+prob3 <- prob2 %>% group_by(year, party, cong) %>% summarize(num = n(),
+                                                            prob_cfab = sum(candpct*abs(recipient_cfscore))/num,
+                                                            prob_dw1ab = sum(candpct*abs(dwnom1))/num,
+                                                            prob_dw2ab = sum(candpct*abs(dwnom2))/num,
+                                                            prob_ddab = sum(candpct*abs(dwdime))/num,
+                                                            cf_dist = sum(candpct*abs(cf_dist))/num,
+                                                            dw1_dist = sum(candpct*abs(dw1_dist))/num,
+                                                            dw2_dist = sum(candpct*abs(dw2_dist))/num,
+                                                            dd_dist = sum(candpct*abs(dd_dist))/num) %>% 
+  arrange(year, cong, party) %>% ungroup(.)
+
+
+prob_anl2 <- left_join(prob3, try,
+                      by= c("cong" = "cong",
+                            "year"= "year.x")) %>% 
+  mutate(nd_death = ifelse(is.na(.$death10 == T), 0, .$death10),
+         nd_affect = ifelse(is.na(.$affect10 == T), 0, .$affect10),
+         nd_both = ifelse(is.na(.$both == T), 0, .$both)) %>% 
+  mutate(close = as.numeric(.$close),
+         nd_death2 = ifelse(.$close < 300 & .$nd_death == 1, 1, 0),
+         nd_affect2 = ifelse(.$close < 300 & .$nd_affect == 1, 1, 0),
+         nd_both2 = ifelse(.$close < 300 & .$nd_both == 1, 1, 0))
+
+# absolute
+
+feols(prob_cfab ~ nd_death2 | cong + year + party, data=prob_anl2 )
+feols(prob_dw1ab ~ nd_death2 | cong + year + party, data=prob_anl2 )
+feols(prob_dw2ab ~ nd_death2 | cong + year + party, data=prob_anl2 )
+feols(prob_ddab ~ nd_death2 | cong + year + party, data=prob_anl2 )
+
+feols(prob_cfab ~ nd_affect2 | cong + year + party, data=prob_anl2 )
+feols(prob_dw1ab ~ nd_affect2 | cong + year + party, data=prob_anl2 )
+feols(prob_dw2ab ~ nd_affect2 | cong + year + party, data=prob_anl2 )
+feols(prob_ddab ~ nd_affect2 | cong + year + party, data=prob_anl2 )
+
+feols(prob_cfab ~ nd_both2 | cong + year + party, data=prob_anl2 )
+feols(prob_dw1ab ~ nd_both2 | cong + year + party, data=prob_anl2 )
+feols(prob_dw2ab ~ nd_both2 | cong + year + party, data=prob_anl2 )
+feols(prob_ddab ~ nd_both2 | cong + year + party, data=prob_anl2 )
+
+# abs dist from median
+
+feols(cf_dist ~ nd_death2 | cong + year + party, data=prob_anl2)
+feols(dw1_dist ~ nd_death2 | cong + year + party, data=prob_anl2)
+feols(dw2_dist ~ nd_death2 | cong + year + party, data=prob_anl2)
+feols(dd_dist ~ nd_death2 | cong + year + party, data=prob_anl2)
+
+feols(cf_dist ~ nd_affect2 | cong + year + party, data=prob_anl2)
+feols(dw1_dist ~ nd_affect2 | cong + year + party, data=prob_anl2)
+feols(dw2_dist ~ nd_affect2 | cong + year + party, data=prob_anl2)
+feols(dd_dist ~ nd_affect2 | cong + year + party, data=prob_anl2)
+
+feols(cf_dist ~ nd_both2 | cong + year + party, data=prob_anl2)
+feols(dw1_dist ~ nd_both2 | cong + year + party, data=prob_anl2)
+feols(dw2_dist ~ nd_both2 | cong + year + party, data=prob_anl2)
+feols(dd_dist ~ nd_both2 | cong + year + party, data=prob_anl2)
+
+
+prob_death1 <- feols(prob_cfab ~ nd_death2 | cong + year + party, data=prob_anl2)
+prob_death2 <- feols(prob_dw2ab ~ nd_death2 | cong + year + party, data=prob_anl2)
+
+prob_affect1 <- feols(prob_cfab ~ nd_affect2 | cong + year + party, data=prob_anl2)
+prob_affect2 <- feols(prob_dw2ab ~ nd_affect2 | cong + year + party, data=prob_anl2)
+
+prob_both1 <- feols(prob_cfab ~ nd_both2 | cong + year + party, data=prob_anl2) 
+
+
+
+#######FINAL RESULTS###########
+
+### ND --> IDEO
+
+ideo_death1 <- feols(ab.dist ~ nd_death2 | district + cycle + party, data=winner)
+ideo_death2 <- feols(ab.dist.dw1 ~ nd_death2 | district + cycle + party, data=winner)
+ideo_death3 <- feols(ab.dist.dwdime ~ nd_death2 | district + cycle + party, data=winner)
+
+ideo_affect1 <- feols(ab.dist ~ nd_affect2 | district + cycle + party, data=winner)
+ideo_affect2 <- feols(ab.dist.dw1 ~ nd_affect2 | district + cycle + party, data=winner)
+ideo_affect3 <- feols(ab.dist.dwdime ~ nd_affect2 | district + cycle + party, data=winner)
+
+ideo_both1 <- feols(ab.dist ~ nd_both2 | district + cycle + party, data=winner)
+ideo_both2 <- feols(ab.dist.dw1 ~ nd_both2 | district + cycle + party, data=winner)
+ideo_both3 <- feols(ab.dist.dwdime ~ nd_both2 | district + cycle + party, data=winner)
+
+i1 <- tidy(ideo_death1) %>% mutate(model = "CF")
+i2 <- tidy(ideo_death2) %>% mutate(model = "DW")
+i3 <- tidy(ideo_death3) %>% mutate(model = "DW-dime")
+
+i4 <- tidy(ideo_affect1) %>% mutate(model = "CF")
+i5 <- tidy(ideo_affect2) %>% mutate(model = "DW")
+i6 <- tidy(ideo_affect3) %>% mutate(model = "DW-dime")
+
+i7 <- tidy(ideo_both1) %>% mutate(model = "CF")
+i8 <- tidy(ideo_both2) %>% mutate(model = "DW")
+i9 <- tidy(ideo_both3) %>% mutate(model = "DW-dime")
+
+
+dwplot(rbind(i1, i2, i3, i4, i5, i6, i7, i8, i9)) %>% 
+  relabel_predictors(c(nd_death2 = "Death",
+                       nd_affect2 = "Affected",
+                       nd_both2 = "Both")) +
+  xlab("Coefficient Estimate") + ylab("") +
+  geom_vline(xintercept=0, linetype=2) +
+  ggtitle("")  +
+  scale_color_manual(name = "",
+                     values=c("cadetblue","violetred", "darkolivegreen" )) +
+  theme(legend.position = "bottom") 
+
+ggsave("dist_ideo.pdf", plot = last_plot(),
+       width = 6, height = 4)
+
+
+etable(ideo_death1, ideo_affect1, ideo_both1, 
+       #title = "", 
+       fitstat = c("n"),
+       signifCode = c("***"=0.001, "**"=0.01, "*"=0.05),
+       tex = TRUE, style.tex = style.tex("aer",tabular="*"),
+       dict=c(nd_death2 = "Death", nd_affect2 = "Affected", nd_both2 = "Both", 
+              ab.dist = "Abs.CF Dist"),
+       fixef.group = list("District FE"="district",
+                          "Cycle FE"="cycle",
+                          "Party FE"="party"))
+
+etable(ideo_death2, ideo_affect2, ideo_both2, 
+       #title = "", 
+       fitstat = c("n"),
+       signifCode = c("***"=0.001, "**"=0.01, "*"=0.05),
+       tex = TRUE, style.tex = style.tex("aer",tabular="*"),
+       dict=c(nd_death2 = "Death", nd_affect2 = "Affected", nd_both2 = "Both", 
+              ab.dist.dw1 = "Abs.DW Dist"),
+       fixef.group = list("District FE"="district",
+                          "Cycle FE"="cycle",
+                          "Party FE"="party"))
+
+
+# just dw
+
+dwplot(rbind(i2, i5, i8)) %>% 
+  relabel_predictors(c(nd_death2 = "Death",
+                       nd_affect2 = "Affected",
+                       nd_both2 = "Both")) +
+  xlab("Coefficient Estimate") + ylab("") +
+  geom_vline(xintercept=0, linetype=2) +
+  ggtitle("")  +
+  scale_color_manual(name = "", values=c("cadetblue")) +
+  theme(legend.position = "bottom") 
+
+ggsave("dist_ideo_dw.pdf", plot = last_plot(),
+       width = 6, height = 4)
+
+etable(ideo_death3, ideo_affect3, ideo_both3, 
+       #title = "", 
+       fitstat = c("n"),
+       signifCode = c("***"=0.001, "**"=0.01, "*"=0.05),
+       tex = TRUE, style.tex = style.tex("aer",tabular="*"),
+       dict=c(nd_death2 = "Death", nd_affect2 = "Affected", nd_both2 = "Both", 
+              ab.dist.dd = "Abs.DW-Dime Dist"),
+       fixef.group = list("District FE"="district",
+                          "Cycle FE"="cycle",
+                          "Party FE"="party"))
+
+
+### ND --> PROB
+
+prob_a <- prob2 %>% mutate(
+  cf_median = case_when(.$party == 100 & .$year == 2000 ~ median(.$recipient_cfscore[.$party == 100 & .$year == 2000], na.rm=T),
+                        .$party == 100 & .$year == 2002 ~ median(.$recipient_cfscore[.$party == 100 & .$year == 2002], na.rm=T),
+                        .$party == 100 & .$year == 2004 ~ median(.$recipient_cfscore[.$party == 100 & .$year == 2004], na.rm=T),
+                        .$party == 100 & .$year == 2006 ~ median(.$recipient_cfscore[.$party == 100 & .$year == 2006], na.rm=T),
+                        .$party == 100 & .$year == 2008 ~ median(.$recipient_cfscore[.$party == 100 & .$year == 2008], na.rm=T),
+                        .$party == 100 & .$year == 2010 ~ median(.$recipient_cfscore[.$party == 100 & .$year == 2010], na.rm=T),
+                        .$party == 100 & .$year == 2012 ~ median(.$recipient_cfscore[.$party == 100 & .$year == 2012], na.rm=T),
+                        .$party == 100 & .$year == 2014 ~ median(.$recipient_cfscore[.$party == 100 & .$year == 2014], na.rm=T),
+                        .$party == 200 & .$year == 2000 ~ median(.$recipient_cfscore[.$party == 200 & .$year == 2000], na.rm=T),
+                        .$party == 200 & .$year == 2002 ~ median(.$recipient_cfscore[.$party == 200 & .$year == 2002], na.rm=T),
+                        .$party == 200 & .$year == 2004 ~ median(.$recipient_cfscore[.$party == 200 & .$year == 2004], na.rm=T),
+                        .$party == 200 & .$year == 2006 ~ median(.$recipient_cfscore[.$party == 200 & .$year == 2006], na.rm=T),
+                        .$party == 200 & .$year == 2008 ~ median(.$recipient_cfscore[.$party == 200 & .$year == 2008], na.rm=T),
+                        .$party == 200 & .$year == 2010 ~ median(.$recipient_cfscore[.$party == 200 & .$year == 2010], na.rm=T),
+                        .$party == 200 & .$year == 2012 ~ median(.$recipient_cfscore[.$party == 200 & .$year == 2012], na.rm=T),
+                        .$party == 200 & .$year == 2014 ~ median(.$recipient_cfscore[.$party == 200 & .$year == 2014], na.rm=T)),
+  dw1_median = case_when(.$party == 100 & .$year == 2000 ~ median(.$dwnom1[.$party == 100 & .$year == 2000], na.rm=T),
+                         .$party == 100 & .$year == 2002 ~ median(.$dwnom1[.$party == 100 & .$year == 2002], na.rm=T),
+                         .$party == 100 & .$year == 2004 ~ median(.$dwnom1[.$party == 100 & .$year == 2004], na.rm=T),
+                         .$party == 100 & .$year == 2006 ~ median(.$dwnom1[.$party == 100 & .$year == 2006], na.rm=T),
+                         .$party == 100 & .$year == 2008 ~ median(.$dwnom1[.$party == 100 & .$year == 2008], na.rm=T),
+                         .$party == 100 & .$year == 2010 ~ median(.$dwnom1[.$party == 100 & .$year == 2010], na.rm=T),
+                         .$party == 100 & .$year == 2012 ~ median(.$dwnom1[.$party == 100 & .$year == 2012], na.rm=T),
+                         .$party == 100 & .$year == 2014 ~ median(.$dwnom1[.$party == 100 & .$year == 2014], na.rm=T),
+                         .$party == 200 & .$year == 2000 ~ median(.$dwnom1[.$party == 200 & .$year == 2000], na.rm=T),
+                         .$party == 200 & .$year == 2002 ~ median(.$dwnom1[.$party == 200 & .$year == 2002], na.rm=T),
+                         .$party == 200 & .$year == 2004 ~ median(.$dwnom1[.$party == 200 & .$year == 2004], na.rm=T),
+                         .$party == 200 & .$year == 2006 ~ median(.$dwnom1[.$party == 200 & .$year == 2006], na.rm=T),
+                         .$party == 200 & .$year == 2008 ~ median(.$dwnom1[.$party == 200 & .$year == 2008], na.rm=T),
+                         .$party == 200 & .$year == 2010 ~ median(.$dwnom1[.$party == 200 & .$year == 2010], na.rm=T),
+                         .$party == 200 & .$year == 2012 ~ median(.$dwnom1[.$party == 200 & .$year == 2012], na.rm=T),
+                         .$party == 200 & .$year == 2014 ~ median(.$dwnom1[.$party == 200 & .$year == 2014], na.rm=T)),
+  dw2_median = case_when(.$party == 100 & .$year == 2000 ~ median(.$dwnom2[.$party == 100 & .$year == 2000], na.rm=T),
+                         .$party == 100 & .$year == 2002 ~ median(.$dwnom2[.$party == 100 & .$year == 2002], na.rm=T),
+                         .$party == 100 & .$year == 2004 ~ median(.$dwnom2[.$party == 100 & .$year == 2004], na.rm=T),
+                         .$party == 100 & .$year == 2006 ~ median(.$dwnom2[.$party == 100 & .$year == 2006], na.rm=T),
+                         .$party == 100 & .$year == 2008 ~ median(.$dwnom2[.$party == 100 & .$year == 2008], na.rm=T),
+                         .$party == 100 & .$year == 2010 ~ median(.$dwnom2[.$party == 100 & .$year == 2010], na.rm=T),
+                         .$party == 100 & .$year == 2012 ~ median(.$dwnom2[.$party == 100 & .$year == 2012], na.rm=T),
+                         .$party == 100 & .$year == 2014 ~ median(.$dwnom2[.$party == 100 & .$year == 2014], na.rm=T),
+                         .$party == 200 & .$year == 2000 ~ median(.$dwnom2[.$party == 200 & .$year == 2000], na.rm=T),
+                         .$party == 200 & .$year == 2002 ~ median(.$dwnom2[.$party == 200 & .$year == 2002], na.rm=T),
+                         .$party == 200 & .$year == 2004 ~ median(.$dwnom2[.$party == 200 & .$year == 2004], na.rm=T),
+                         .$party == 200 & .$year == 2006 ~ median(.$dwnom2[.$party == 200 & .$year == 2006], na.rm=T),
+                         .$party == 200 & .$year == 2008 ~ median(.$dwnom2[.$party == 200 & .$year == 2008], na.rm=T),
+                         .$party == 200 & .$year == 2010 ~ median(.$dwnom2[.$party == 200 & .$year == 2010], na.rm=T),
+                         .$party == 200 & .$year == 2012 ~ median(.$dwnom2[.$party == 200 & .$year == 2012], na.rm=T),
+                         .$party == 200 & .$year == 2014 ~ median(.$dwnom2[.$party == 200 & .$year == 2014], na.rm=T)),
+  dd_median = case_when(.$party == 100 & .$year == 2000 ~ median(.$dwdime[.$party == 100 & .$year == 2000], na.rm=T),
+                        .$party == 100 & .$year == 2002 ~ median(.$dwdime[.$party == 100 & .$year == 2002], na.rm=T),
+                        .$party == 100 & .$year == 2004 ~ median(.$dwdime[.$party == 100 & .$year == 2004], na.rm=T),
+                        .$party == 100 & .$year == 2006 ~ median(.$dwdime[.$party == 100 & .$year == 2006], na.rm=T),
+                        .$party == 100 & .$year == 2008 ~ median(.$dwdime[.$party == 100 & .$year == 2008], na.rm=T),
+                        .$party == 100 & .$year == 2010 ~ median(.$dwdime[.$party == 100 & .$year == 2010], na.rm=T),
+                        .$party == 100 & .$year == 2012 ~ median(.$dwdime[.$party == 100 & .$year == 2012], na.rm=T),
+                        .$party == 100 & .$year == 2014 ~ median(.$dwdime[.$party == 100 & .$year == 2014], na.rm=T),
+                        .$party == 200 & .$year == 2000 ~ median(.$dwdime[.$party == 200 & .$year == 2000], na.rm=T),
+                        .$party == 200 & .$year == 2002 ~ median(.$dwdime[.$party == 200 & .$year == 2002], na.rm=T),
+                        .$party == 200 & .$year == 2004 ~ median(.$dwdime[.$party == 200 & .$year == 2004], na.rm=T),
+                        .$party == 200 & .$year == 2006 ~ median(.$dwdime[.$party == 200 & .$year == 2006], na.rm=T),
+                        .$party == 200 & .$year == 2008 ~ median(.$dwdime[.$party == 200 & .$year == 2008], na.rm=T),
+                        .$party == 200 & .$year == 2010 ~ median(.$dwdime[.$party == 200 & .$year == 2010], na.rm=T),
+                        .$party == 200 & .$year == 2012 ~ median(.$dwdime[.$party == 200 & .$year == 2012], na.rm=T),
+                        .$party == 200 & .$year == 2014 ~ median(.$dwdime[.$party == 200 & .$year == 2014], na.rm=T)))
+
+prob_b <- prob_a %>% mutate(cf_dist = abs(.$recipient_cfscore-.$cf_median),
+                            dw1_dist = abs(.$dwnom1-.$dw1_median),
+                            dw2_dist = abs(.$dwnom2-.$dw2_median),
+                            dd_dist = abs(.$dwdime-.$dd_median))
+
+prob_c <- prob_b %>% group_by(year, party, cong) %>% summarize(num=n(),
+                                                               prob_cf = sum(candpct*cf_dist)/num,
+                                                               prob_dw1 = sum(candpct*dw1_dist)/num,
+                                                               prob_dw2 = sum(candpct*dw2_dist)/num,
+                                                               prob_dd = sum(candpct*dd_dist)/num,
+                                                               ab_cf = sum(candpct*abs(recipient_cfscore))/num,
+                                                               ab_dw1 = sum(candpct*abs(dwnom1))/num,
+                                                               ab_dw2 = sum(candpct*abs(dwnom2))/num,
+                                                               ab_dd = sum(candpct*abs(dwdime))/num,) %>% ungroup(.)
+
+prob_anl3 <- left_join(prob_c, try,
+                       by= c("cong" = "cong",
+                             "year"= "year.x")) %>% 
+  mutate(nd_death = ifelse(is.na(.$death10 == T), 0, .$death10),
+         nd_affect = ifelse(is.na(.$affect10 == T), 0, .$affect10),
+         nd_both = ifelse(is.na(.$both == T), 0, .$both)) %>% 
+  mutate(close = as.numeric(.$close),
+         nd_death2 = ifelse(.$close < 300 & .$nd_death == 1, 1, 0),
+         nd_affect2 = ifelse(.$close < 300 & .$nd_affect == 1, 1, 0),
+         nd_both2 = ifelse(.$close < 300 & .$nd_both == 1, 1, 0))
+
+# distance from med
+prob_death1 <- feols(prob_cf ~ nd_death2 | cong + year + party, data=prob_anl3)
+prob_death2 <- feols(prob_dw1 ~ nd_death2 | cong + year + party, data=prob_anl3) #*
+prob_death3 <- feols(prob_dd ~ nd_death2 | cong + year + party, data=prob_anl3) #*
+
+prob_affect1 <- feols(prob_cf ~ nd_affect2 | cong + year + party, data=prob_anl3)
+prob_affect2 <- feols(prob_dw1 ~ nd_affect2 | cong + year + party, data=prob_anl3) #*
+prob_affect3 <- feols(prob_dd ~ nd_affect2 | cong + year + party, data=prob_anl3)
+
+prob_both1 <- feols(prob_cf ~ nd_both2 | cong + year + party, data=prob_anl3)
+prob_both2 <- feols(prob_dw1 ~ nd_both2 | cong + year + party, data=prob_anl3) #*
+prob_both3 <- feols(prob_dd ~ nd_both2 | cong + year + party, data=prob_anl3) #*
+
+p1 <- tidy(prob_death1) %>% mutate(model = "CF")
+p2 <- tidy(prob_death2) %>% mutate(model = "DW")
+p3 <- tidy(prob_death3) %>% mutate(model = "DW-dime")
+
+p4 <- tidy(prob_affect1) %>% mutate(model = "CF")
+p5 <- tidy(prob_affect2) %>% mutate(model = "DW")
+p6 <- tidy(prob_affect3) %>% mutate(model = "DW-dime")
+
+p7 <- tidy(prob_both1) %>% mutate(model = "CF")
+p8 <- tidy(prob_both2) %>% mutate(model = "DW")
+p9 <- tidy(prob_both3) %>% mutate(model = "DW-dime")
+
+dwplot(rbind(p1, p2, p3, p4, p5, p6, p7, p8, p9)) %>% 
+  relabel_predictors(c(nd_death2 = "Death",
+                       nd_affect2 = "Affected",
+                       nd_both2 = "Both")) +
+  xlab("Coefficient Estimate") + ylab("") +
+  geom_vline(xintercept=0, linetype=2) +
+  ggtitle("")  +
+  scale_color_manual(name = "",
+                     values=c("cadetblue","violetred", "darkolivegreen" )) +
+  theme(legend.position = "bottom") 
+
+ggsave("dist_prob.pdf", plot = last_plot(),
+       width = 6, height = 4)
+
+
+etable(prob_death1, prob_affect1, prob_both1, 
+       #title = "", 
+       fitstat = c("n"),
+       signifCode = c("***"=0.001, "**"=0.01, "*"=0.05),
+       tex = TRUE, style.tex = style.tex("aer",tabular="*"),
+       dict=c(nd_death2 = "Death", nd_affect2 = "Affected", nd_both2 = "Both", 
+              prob_cf = "CF"),
+       fixef.group = list("District FE"="cong",
+                          "Cycle FE"="year",
+                          "Party FE"="party"))
+
+etable(prob_death2, prob_affect2, prob_both2, 
+       #title = "", 
+       fitstat = c("n"),
+       signifCode = c("***"=0.001, "**"=0.01, "*"=0.05),
+       tex = TRUE, style.tex = style.tex("aer",tabular="*"),
+       dict=c(nd_death2 = "Death", nd_affect2 = "Affected", nd_both2 = "Both", 
+              prob_dw1 = "DW"),
+       fixef.group = list("District FE"="cong",
+                          "Cycle FE"="year",
+                          "Party FE"="party"))
+
+etable(prob_death3, prob_affect3, prob_both3, 
+       #title = "", 
+       fitstat = c("n"),
+       signifCode = c("***"=0.001, "**"=0.01, "*"=0.05),
+       tex = TRUE, style.tex = style.tex("aer",tabular="*"),
+       dict=c(nd_death2 = "Death", nd_affect2 = "Affected", nd_both2 = "Both", 
+              prob_dd = "DW-Dime"),
+       fixef.group = list("District FE"="cong",
+                          "Cycle FE"="year",
+                          "Party FE"="party"))
+
+prob_both2 <- feols(prob_dw2ab ~ nd_both2 | cong + year + party, data=prob_anl2)
+
+
+
+# just dw
+
+dwplot(rbind(p2, p5, p8)) %>% 
+  relabel_predictors(c(nd_death2 = "Death",
+                       nd_affect2 = "Affected",
+                       nd_both2 = "Both")) +
+  xlab("Coefficient Estimate") + ylab("") +
+  geom_vline(xintercept=0, linetype=2) +
+  ggtitle("")  +
+  scale_color_manual(name = "",
+                     values=c("cadetblue")) +
+  theme(legend.position = "bottom") 
+
+ggsave("dist_prob_dw.pdf", plot = last_plot(),
+       width = 6, height = 4)
 
 ```
 
