@@ -5,8 +5,12 @@ date: "2023-09-25"
 output: html_document
 ---
 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "/Users/hyoon/Desktop/apsa_interdistrict")
+```
+
 ```{r}
-setwd("/Users/hyoon/Desktop/apsa_interdistrict")
 library(DBI)
 library(RSQLite)
 library(dplyr)
@@ -21,11 +25,10 @@ library(fixest)
 library(haven)
 library(broom)
 library(dotwhisker)
+```
 
-#############================================================================
-### DIME data
-### Bringing necessary data in from SQL 
-
+Bringing DIME data from SQL
+```{r}
 portaldb <- dbConnect(SQLite(), "/Users/hyoon/Desktop/apsa_interdistrict/dime.sqlite3")
 
 ## recipient data
@@ -70,167 +73,10 @@ join <- left_join(cont %>% select(cycle, amount, date, bonica_cid, contributor_c
 
 ## difference b/w party and recipient party??
 # party is from recipient data and recipient party is from contributor data
+```
 
-
-# #############==TRIAL==============================================================
-# ### Disaster data
-# 
-# ## fips for county codes
-# fips <- read.csv("state-geocodes-v2016.csv") %>% 
-#   rename(Region = Census.Bureau.Region.and.Division.Codes.and.Federal.Information.Processing.System..FIPS..Codes.for.States, 
-#          Division = X,
-#          FIPS = X.1, 
-#          Name = X.2) %>%
-#   mutate(abb = state2abbr(.$Name))
-# 
-# fips <- fips[-c(1,2,3,4,5,6,7,14,18,19,25,33,34,44,49,54,55,64),]
-# 
-# ## county-district matching from census
-# cd109 <- read.delim("cou_cd109_natl.txt") %>%
-#   mutate(state = str_extract(.$CONGRESSIONAL.DISTRICTS.BY.COUNTIES..NATIONAL., "^[^,]*(?=,)"),
-#          county = str_extract(.$CONGRESSIONAL.DISTRICTS.BY.COUNTIES..NATIONAL., "(?<=,)[^,]*(?=,)"),
-#          district = str_extract(.$CONGRESSIONAL.DISTRICTS.BY.COUNTIES..NATIONAL., "(?<=,)[^,]*$")) %>%
-#   slice(-1) %>% select(-1) %>% 
-#   left_join(., fips %>% select(FIPS, abb), by = c("state"="FIPS")) %>%
-#   mutate(cong = paste0(.$abb, .$district)) %>% select(-state)
-# 
-# cd113 <- read.delim("natl_cocd_delim13.txt") %>%
-#   mutate(state = str_extract(.$CONGRESSIONAL.DISTRICTS.BY.COUNTY..NATIONAL., "^[^,]*(?=,)"),
-#          county = str_extract(.$CONGRESSIONAL.DISTRICTS.BY.COUNTY..NATIONAL., "(?<=,)[^,]*(?=,)"),
-#          district = str_extract(.$CONGRESSIONAL.DISTRICTS.BY.COUNTY..NATIONAL., "(?<=,)[^,]*$")) %>%
-#   slice(-1) %>% select(-1) %>% 
-#   left_join(., fips %>% select(FIPS, abb), by = c("state"="FIPS")) %>%
-#   mutate(cong = paste0(.$abb, .$district)) %>% select(-state) 
-# 
-# 
-# ## fema for disaster data
-# fema <- read.csv("FemaWebDeclarationAreas.csv")  %>% 
-#   mutate(designatedDate = as.Date(substr(.$designatedDate, 1, 10)),
-#          countycode = as.numeric(str_sub(.$placeCode, 3))) %>%
-#   mutate(countycode = sprintf("%03d", as.numeric(.$countycode))) %>%
-#   filter(designatedDate >= "1999-01-01" & designatedDate < "2014-12-12") # 107-114
-# 
-# fema00 <- fema %>% filter(designatedDate <= "2008-12-12") %>% 
-#   left_join(., cd109 %>% select(county, abb, cong), by = c("countycode"="county", "stateCode"="abb"))
-# 
-# fema10 <- fema %>% filter(designatedDate > "2008-12-12") %>% 
-#   left_join(., cd113 %>% select(county, abb, cong), by = c("countycode"="county", "stateCode"="abb"))
-# 
-# fema_area <- rbind(fema00, fema10)
-# 
-# # add fema_declaration for more info on disasters
-# fema_dec <- read.csv("FemaWebDisasterDeclarations.csv") %>% 
-#   mutate(declarationDate <- as.Date(substr(.$declarationDate, 1, 10)))
-# 
-# fema <- left_join(fema_area, fema_dec, by = c("disasterNumber"="disasterNumber")) %>%
-#   filter(declarationType == "Major Disaster") %>% 
-#   select(programTypeDescription, stateCode.x, designatedDate, cong, 
-#          declarationDate, disasterName, incidentType, countycode) %>%
-#   distinct() %>% mutate(year = substr(.$declarationDate, start = 1, stop = 4),
-#                         month = substr(.$declarationDate, start = 6, stop = 7)) %>%
-#   mutate_at(c('year', 'month'), as.integer)
-# # area file: The date a disaster was officially designated (designatedDate. declare.date.x)
-# # declaration file: The date the disaster was declared (declarationDate. declare.date.y)
-# 
-# 
-# # em-dat data
-# emdat <- read.csv("emdat_public_trial.csv", na.strings=c("", "NA")) %>% 
-#   filter(Country=="United States of America (the)") %>%
-#   melt(id.vars=c("Dis.No", "Year", "Seq", "Disaster.Group", "Disaster.Subgroup", 
-#                                "Disaster.Type", "Disaster.Subtype", "Disaster.Subsubtype",
-#                                "Event.Name",  "Entry.Criteria", "Country", "ISO", "Region", 
-#                                "Continent", "X", "Origin", "Associated.Dis", "Associated.Dis2", 
-#                                "OFDA.Response", "Appeal", "Declaration", "Aid.Contribution",
-#                                "Dis.Mag.Value", "Dis.Mag.Scale", "Latitude", "Longitude", 
-#                                "Local.Time", "River.Basin", "Start.Year", "Start.Month", 
-#                                "Start.Day", "End.Year", "End.Month", "End.Day", "Total.Deaths", 
-#                                "No.Injured", "No.Affected", "No.Homeless", "Total.Affected", 
-#                                "Reconstruction.Costs...000.US..", "Insured.Damages...000.US..", 
-#                                "Total.Damages...000.US..", "CPI")) %>%
-#   drop_na("value") %>% select(Start.Year, Start.Month, Start.Day, End.Year, End.Month, End.Day, 
-#                               Disaster.Subgroup, Disaster.Type, Disaster.Subtype, Event.Name, 
-#                               Entry.Criteria, Total.Deaths, No.Injured, 
-#                               No.Affected, Total.Affected, Total.Damages...000.US.., value) %>%
-#   mutate(abb = state2abbr(.$value))
-# 
-# ## join fema and emdat
-# disaster <- left_join(fema, emdat, by = c("stateCode.x"="abb", 
-#                                           "year"="Start.Year",
-#                                           "month"="Start.Month")) %>% drop_na("value") %>%
-#   mutate(declarationDate = as.Date(.$declarationDate),
-#          stateCode = .$stateCode.x) %>%
-#   select(programTypeDescription, stateCode, 
-#          designatedDate, declarationDate, cong, 
-#          disasterName, incidentType,
-#          Disaster.Type, Event.Name,
-#          Entry.Criteria, Total.Deaths,
-#          No.Injured, No.Affected,
-#          Total.Affected, 
-#          Total.Damages...000.US.., countycode) 
-# 
-# #write.csv(disaster, "disaster.csv")
-# 
-# 
-# #############================================================================
-# ### Adding disaster info to congressional districts
-# 
-# pri <- read.csv("primarydates.csv") %>% # 1994-2018
-#   mutate(pri.date = as.Date(.$date, "%m/%d/%Y"),
-#          prev = .$election_year + 2)
-# 
-# # set disaster to be the top 25 percentile
-# # reasoning: least number of missing values
-# disaster <- disaster %>% filter(Total.Deaths > 47)
-# 
-# # function to map disaster to district  
-# cong_disaster <- function(df, number, date){
-#   
-#   # add year, primary dates for each state  
-#   cd <- df %>% mutate(year = number) %>%
-#     left_join(., pri %>% select(state_abbr, election_year, pri.date),
-#               by=c("abb"="state_abbr", "year"="election_year")) %>%
-#     left_join(., pri %>% select(state_abbr, prev, pri.date),
-#               by=c("abb"="state_abbr", "year"="prev")) %>% # pri.x is date of election, pri.y is date of previous election
-#     mutate(unq = paste0(.$cong, .$county)) 
-#   
-#   # join cd and disaster
-#   cd_treat <- left_join(cd, disaster, 
-#                         by=c("abb"="stateCode", "county"="countycode")) %>% 
-#     filter(declarationDate> date & declarationDate<pri.date.x) %>% select(unq, declarationDate)
-#   
-#   cd <- left_join(cd %>% mutate(disaster = ifelse(cd$unq %in% cd_treat$unq, 1, 0)), cd_treat,
-#                      by = "unq")
-#   
-#   # collapse to congressional district
-#   cd <- left_join(cd %>% group_by(cong) %>% dplyr::summarize(dis=mean(disaster)) %>% mutate(treat=ifelse(dis>0.5, 1, 0)),
-#                      cd %>% group_by(cong) %>% arrange(desc(declarationDate)) %>% slice(which.max(disaster)) %>% select(cong, pri.date.x, declarationDate, year), 
-#                      by="cong")
-#   return(cd)
-# }
-# 
-# ## run function for all congressional years
-# cd107 <- cong_disaster(cd109, 2000, "1999-01-01")
-# cd108 <- cong_disaster(cd109, 2002, "2001-01-01")
-# cd110 <- cong_disaster(cd109, 2006, "2005-01-01")
-# cd111 <- cong_disaster(cd109, 2008, "2007-01-01")
-# cd112 <- cong_disaster(cd113, 2010, "2009-01-01")
-# cd114 <- cong_disaster(cd113, 2014, "2013-01-01")
-# # change these last b/c they will affect others using this
-# cd109 <- cong_disaster(cd109, 2004, "2003-01-01") 
-# cd113 <- cong_disaster(cd113, 2012, "2011-01-01")
-# 
-# ## merge all congressional years
-# cd_join <- rbind(cd107, cd108, cd109, cd110, cd111, cd112, cd113, cd114) %>%
-#   mutate(declarationDate = ifelse(.$treat == 0, NA, .$declarationDate),
-#          close = .$pri.date.x - .$declarationDate ) 
-# 
-# #write.csv(cd_join, "cd_join.csv")
-
-
-
-#############==TRIAL 2 (based on codes.R)==============================================================
-### Disaster data
-
+Disaster data (based on codes.R)
+```{r}
 # fema: county-level
 fema <- read.csv("FemaWebDeclarationAreas.csv")  %>% 
   mutate(designatedDate = as.Date(substr(.$designatedDate, 1, 10)),
@@ -265,24 +111,15 @@ cred_na <- cred %>% summarise(across(c(`Total Deaths`:`Total Damages, Adjusted (
 cred <- cred %>% select("Year", "Seq", "Disaster Type", "Total Deaths", "Total Affected", "Total Damages, Adjusted ('000 US$)", "state", "date",
                         "Start Year", "Start Month", "Start Day") 
 
-
-# disaster criteria
-#cred <- cred %>% mutate(death10 = ifelse(.$`Total Deaths` >= 41, 1, 0),
-#                        affect10 = ifelse(.$`Total Affected` >= 102000, 1, 0)) %>%
-#  mutate(death10 = ifelse(is.na(.$death10 == T), 0, .$death10),
-#         affect10 = ifelse(is.na(.$affect10 == T), 0, .$affect10)) %>%
-#  mutate(both = ifelse(.$death10 == 1 & affect10 ==1, 1, 0))
-
-
 # join fema and cred
 disaster <- left_join(fema, cred, 
                       by = c("stateCode"="state",
                              "year"="Start Year",
                              "month"="Start Month")) %>% drop_na("Seq") %>% distinct()
+```
 
-#############==mapping==============================================================
-### mapping counties to districts (refer to disaster.Rmd)
-
+Mapping counties to districts (refer to disaster.rmd)
+```{r}
 ## fips for county codes
 fips <- read.csv("state-geocodes-v2016.csv") %>% 
   dplyr::rename(Region = 1,
@@ -373,10 +210,10 @@ cong <- left_join(cong, pri %>% dplyr::select(election_year, state_abbr, pri),
          pri = as.Date(.$pri)) %>% select(-state)
 
 #write.csv(cong, "cong.csv")
+```
 
-
-#############==mapping==============================================================
-### mapping counties to districts (refer to disaster.Rmd)
+Joining disaster to district level
+```{r}
 # disaster df is in county level and cong is in district level
 
 trial <- left_join(cong %>% mutate(county = as.numeric(.$county)), 
@@ -387,19 +224,24 @@ trial <- left_join(cong %>% mutate(county = as.numeric(.$county)),
   mutate(close = .$pri - .$date)
 
 # only extract districts
-try <- unique(trial[c("year.x", "cong","close", "pri", "Total Deaths", "Total Affected", "Total Damages, Adjusted ('000 US$)")]) 
+try <- unique(trial[c("year.x", "cong","close", "pri", "Total Deaths", "Total Affected", "Total Damages, Adjusted ('000 US$)")]) %>% 
+  mutate_at(c("Total Deaths", "Total Affected", "Total Damages, Adjusted ('000 US$)"), funs(as.numeric))
 
 
 ## coding decision time
-# check for duplicates (as in multiple disasters in one district)
-try_dupe <- try %>% group_by(year.x, cong) %>% filter(n() > 1) %>% arrange(year.x, cong, close) %>% ungroup(.)
+# there are incidents where there were multiple disasters in one district
+# should i incorporate disasters that happened far before the election season?
 
 # show ones with more than one disasters in the district
-try %>% group_by(year.x, cong) %>% summarize(num = n())
+try %>% group_by(year.x, cong) %>% summarize(num = n()) 
 
-# add up the disaster damage and for disaster date choose the one closer to primary date. also filter for only those happened <300 
-dupe <- try_dupe %>% mutate_at(c("Total Deaths", "Total Affected", "Total Damages, Adjusted ('000 US$)"), funs(as.numeric)) %>% 
-  group_by(year.x, cong) %>% filter(close < 300) %>% summarize(deaths = sum(`Total Deaths`),
+# check for duplicates
+# these only include districts that had multiple disasters in one election year
+try_dupe <- try %>% group_by(year.x, cong) %>% filter(n() > 1) %>% arrange(year.x, cong, close)  %>% ungroup(.)
+
+
+# add up the disaster damage and for disaster date choose the one closer to primary date
+dupe <- try_dupe %>% group_by(year.x, cong) %>% summarize(deaths = sum(`Total Deaths`),
                                                affected = sum(`Total Affected`),
                                                damages = sum(`Total Damages, Adjusted ('000 US$)`),
                                                num = n()) 
@@ -407,22 +249,18 @@ dupe2 <- try_dupe %>% group_by(year.x, cong) %>% arrange(year.x, cong, close) %>
 
 try_dupe2 <- left_join(dupe, dupe2, by = c("year.x"="year.x",
                                            "cong"="cong"))
-
-
 # try_dupe2 contains disasters that have more than 1 disaster in an election year
+
 # try_dupe0 is ones that only had 1 disaster
 try_dupe0 <- try %>% group_by(year.x, cong) %>% filter(n()==1) %>% dplyr::rename(deaths = 5,
                                                                           affected = 6,
-                                                                          damages = 7) %>% 
-  mutate(num = 1) %>% mutate_at(c("deaths", "affected", "damages"), funs(as.numeric))
+                                                                          damages = 7) %>% mutate(num = 1) 
 
 try <- rbind(try_dupe0, try_dupe2)
 
 
-## another dataset with all disasters including >300 (try2)
-# leave all disaster data (including > 300)
-dupe3 <- try_dupe %>% mutate_at(c("Total Deaths", "Total Affected", "Total Damages, Adjusted ('000 US$)"), funs(as.numeric)) %>% 
-  group_by(year.x, cong) %>% summarize(deaths = sum(`Total Deaths`),
+## another dataset with disasters including <300 (try2)
+dupe3 <- try_dupe %>% group_by(year.x, cong) %>% filter(close <= 300) %>% summarize(deaths = sum(`Total Deaths`),
                                        affected = sum(`Total Affected`),
                                        damages = sum(`Total Damages, Adjusted ('000 US$)`),
                                        num = n()) 
@@ -432,8 +270,11 @@ try_dupe3 <- left_join(dupe3, dupe2, by = c("year.x"="year.x",
 
 try2 <- rbind(try_dupe0, try_dupe3) 
 
-#############==join disaster (df: try) and dime (df: join)==============================================================
+# try includes all disasters, try2 only includes ones happened 300 days before election day
+```
 
+Joining disaster and dime
+```{r}
 join <- read.csv("join.csv") # do this bc i made join a function above
 
 agg <- join %>% dplyr::group_by(district, cycle, party) %>% drop_na(same) %>%
@@ -445,22 +286,34 @@ agg <- join %>% dplyr::group_by(district, cycle, party) %>% drop_na(same) %>%
   mutate(pct.out = n.out/(n.in+n.out)*100,
          pct.amt.out = amt.out/(amt.in+amt.out)*100)
 
-agg <- left_join(agg, try,
+# join with try
+agg1 <- left_join(agg, try,
                  by = c("cycle" = "year.x",
                         "district" = "cong"))
 
-# check for duplications
-agg[duplicated(agg[,1:3]),]
+agg1[duplicated(agg1[,1:3]),] # check for duplicates
 
-agg <- agg %>% ungroup(.) %>% mutate(num = ifelse(is.na(.$num)==T, 0, .$num),
+agg1 <- agg1 %>% ungroup(.) %>% mutate(num = ifelse(is.na(.$num)==T, 0, .$num),
                       deaths = ifelse(is.na(.$deaths)==T, 0, .$deaths),
                       affected = ifelse(is.na(.$affected)==T, 0, .$affected),
                       damages = ifelse(is.na(.$damages)==T, 0, .$damages))
 
+# join with try2
+agg2 <- left_join(agg, try2,
+                  by = c("cycle" = "year.x",
+                        "district" = "cong"))
 
-#############================================================================
-### descriptive stats
+agg2[duplicated(agg2[,1:3]),] # check for duplicates
 
+agg2 <- agg2 %>% ungroup(.) %>% mutate(num = ifelse(is.na(.$num)==T, 0, .$num),
+                      deaths = ifelse(is.na(.$deaths)==T, 0, .$deaths),
+                      affected = ifelse(is.na(.$affected)==T, 0, .$affected),
+                      damages = ifelse(is.na(.$damages)==T, 0, .$damages))
+```
+
+
+Descriptive stats
+```{r}
 ## recipient data
 cand_all <- dbGetQuery(portaldb, "SELECT election, cycle, fecyear, bonica_rid, bonica_cid, name, party, 
                                      state, seat, district, Incum_Chall, recipient_cfscore, contributor_cfscore, 
@@ -529,23 +382,40 @@ ggplot(agg %>% filter(recipient_party %in% c(100, 200)) %>% filter(cycle == 2014
        aes(x=pct.out)) + 
   geom_histogram(aes(color = recipient_party), alpha = 0.4) +
   scale_color_manual(values=c( "#56B4E9", "#E69F00"), name = "Party", labels = c("Dem", "Rep")) 
+```
 
+Coding disasters
+```{r}
+# want to make a function where i can put in IV and threshold
 
-###Analysis==========================================================================================
+# agg1 includes all disasters
+quantile(agg1$deaths[agg1$num > 0], probs=seq(0,1,0.1)) # >68
+quantile(agg1$affected[agg1$num > 0], probs=seq(0,1,0.1)) # >225000
+quantile(agg1$damages[agg1$num > 0], probs=seq(0,1,0.1)) # >9916769
 
-quantile(agg$deaths[agg$num > 0], probs=seq(0,1,0.1)) # >46
-quantile(agg$affected[agg$num > 0], probs=seq(0,1,0.1)) # >225000
-quantile(agg$damages[agg$num > 0], probs=seq(0,1,0.1)) # >9916769
-
-quantile(agg2$deaths[agg2$num > 0], probs=seq(0,1,0.1)) # >68
-quantile(agg2$affected[agg2$num > 0], probs=seq(0,1,0.1)) # >225000
-quantile(agg2$damages[agg2$num > 0], probs=seq(0,1,0.1)) # >9916769
-
-agg <- agg %>% mutate(nd_death = ifelse(deaths >= 46, 1, 0),
+agg1 <- agg1 %>% mutate(nd_death = ifelse(deaths >= 68, 1, 0),
                       nd_affected = ifelse(affected >=225000, 1, 0),
                       nd_damages = ifelse(damages >= 9916769, 1, 0))
 
-feols(n.in ~ nd_death | district + cycle + party, agg)
+# agg2 includes <300
+quantile(agg2$deaths[agg2$num > 0], probs=seq(0,1,0.1)) # >46
+quantile(agg2$affected[agg2$num > 0], probs=seq(0,1,0.1)) # >225000
+quantile(agg2$damages[agg2$num > 0], probs=seq(0,1,0.1)) # >9916769
+
+agg2 <- agg2 %>% mutate(nd_death = ifelse(deaths >= 46, 1, 0),
+                      nd_affected = ifelse(affected >=225000, 1, 0),
+                      nd_damages = ifelse(damages >= 9916769, 1, 0))
+```
+
+Analysis
+```{r}
+
+function_name <- function(x, y, dataset) {
+  feols(dataset$y ~ dataset$x | district + cycle + party, data = dataset) %>% tidy()
+}
+  
+
+feols(n.in ~ nd_death | district + cycle + party, agg1)
 feols(n.out ~ nd_death | district + cycle + party, agg)
 feols(amt.in ~ nd_death | district + cycle + party, agg)
 feols(amt.out ~ nd_death | district + cycle + party, agg)
