@@ -286,6 +286,16 @@ agg <- join %>% dplyr::group_by(district, cycle, party) %>% drop_na(same) %>%
   mutate(pct.out = n.out/(n.in+n.out)*100,
          pct.amt.out = amt.out/(amt.in+amt.out)*100)
 
+agg <- left_join(agg, try,
+                 by = c("cycle" = "year.x",
+                        "district" = "cong"))
+
+agg$deaths <- ifelse(is.na(agg$deaths)==T, 0, agg$deaths)
+agg$affected <- ifelse(is.na(agg$affected)==T, 0, agg$affected)
+agg$damages <- ifelse(is.na(agg$damages)==T, 0, agg$damages)
+agg$num <- ifelse(is.na(agg$num)==T, 0, agg$num)
+
+
 # join with try
 agg1 <- left_join(agg, try,
                  by = c("cycle" = "year.x",
@@ -378,15 +388,25 @@ ggplot(agg %>% filter(party %in% c(100,200)) %>% filter(cycle == 2014) %>% filte
   scale_fill_manual(values=c( "#56B4E9", "#E69F00"), name = "Party", labels = c("Dem", "Rep")) +
   scale_color_manual(values=c( "#56B4E9", "#E69F00"), name = "Party", labels = c("Dem", "Rep")) 
 
-ggplot(agg %>% filter(recipient_party %in% c(100, 200)) %>% filter(cycle == 2014),
+ggplot(agg %>% filter(party %in% c(100, 200)) %>% filter(cycle == 2014),
        aes(x=pct.out)) + 
-  geom_histogram(aes(color = recipient_party), alpha = 0.4) +
+  geom_histogram(aes(color = party), alpha = 0.4) +
   scale_color_manual(values=c( "#56B4E9", "#E69F00"), name = "Party", labels = c("Dem", "Rep")) 
 ```
 
 Coding disasters
 ```{r}
 # want to make a function where i can put in IV and threshold
+
+quantile(agg$deaths[agg$num > 0], probs=seq(0,1,0.1)) # >68
+quantile(agg$affected[agg$num > 0], probs=seq(0,1,0.1)) # >225000
+quantile(agg$damages[agg$num > 0], probs=seq(0,1,0.1)) # >9916769
+
+agg <- agg %>% mutate(nd_death = ifelse(deaths >= 46, 1, 0),
+                      nd_affected = ifelse(affected >=225000, 1, 0),
+                      nd_damages = ifelse(damages >= 9916769, 1, 0))
+
+# it seems like agg and agg1 is the same thing
 
 # agg1 includes all disasters
 quantile(agg1$deaths[agg1$num > 0], probs=seq(0,1,0.1)) # >68
@@ -410,57 +430,98 @@ agg2 <- agg2 %>% mutate(nd_death = ifelse(deaths >= 46, 1, 0),
 Analysis
 ```{r}
 
-function_name <- function(x, y, dataset) {
-  feols(dataset$y ~ dataset$x | district + cycle + party, data = dataset) %>% tidy()
-}
-  
+### absolute number
 
+# all cases
 feols(n.in ~ nd_death | district + cycle + party, agg1)
-feols(n.out ~ nd_death | district + cycle + party, agg)
-feols(amt.in ~ nd_death | district + cycle + party, agg)
-feols(amt.out ~ nd_death | district + cycle + party, agg)
+feols(n.out ~ nd_death | district + cycle + party, agg1)
+feols(amt.in ~ nd_death | district + cycle + party, agg1)
+feols(amt.out ~ nd_death | district + cycle + party, agg1)
 
+# all cases - interactive FE
+feols(n.in ~ nd_death | district^party + cycle^party, agg1)
+feols(n.out ~ nd_death | district^party + cycle^party, agg1)
+feols(amt.in ~ nd_death | district^party + cycle^party, agg1)
+feols(amt.out ~ nd_death | district^party + cycle^party, agg1)
+
+# <300 
 feols(n.in ~ nd_death | district + cycle + party, agg2)
 feols(n.out ~ nd_death | district + cycle + party, agg2)
 feols(amt.in ~ nd_death | district + cycle + party, agg2)
 feols(amt.out ~ nd_death | district + cycle + party, agg2)
 
-feols(n.in ~ nd_damages | district + cycle + party, agg)
-feols(n.out ~ nd_damages | district + cycle + party, agg)
-feols(amt.in ~ nd_damages | district + cycle + party, agg)
-feols(amt.out ~ nd_damages | district + cycle + party, agg)
+# <300 - interactive FE
+feols(n.in ~ nd_death | district^party + cycle^party, agg2)
+feols(n.out ~ nd_death | district^party + cycle^party, agg2)
+feols(amt.in ~ nd_death | district^party + cycle^party, agg2)
+feols(amt.out ~ nd_death | district^party + cycle^party, agg2)
+
+feols(n.in ~ nd_damages | district + cycle + party, agg1)
+feols(n.out ~ nd_damages | district + cycle + party, agg1)
+feols(amt.in ~ nd_damages | district + cycle + party, agg1)
+feols(amt.out ~ nd_damages | district + cycle + party, agg1)
+
+feols(n.in ~ nd_damages | district^party + cycle^party, agg1)
+feols(n.out ~ nd_damages | district^party + cycle^party, agg1)
+feols(amt.in ~ nd_damages | district^party + cycle^party, agg1)
+feols(amt.out ~ nd_damages | district^party + cycle^party, agg1)
 
 feols(n.in ~ nd_damages | district + cycle + party, agg2)
 feols(n.out ~ nd_damages | district + cycle + party, agg2)
 feols(amt.in ~ nd_damages | district + cycle + party, agg2)
 feols(amt.out ~ nd_damages | district + cycle + party, agg2)
 
+feols(n.in ~ nd_damages | district^party + cycle^party, agg2)
+feols(n.out ~ nd_damages | district^party + cycle^party, agg2)
+feols(amt.in ~ nd_damages | district^party + cycle^party, agg2)
+feols(amt.out ~ nd_damages | district^party + cycle^party, agg2)
+
+
 ### effect of nd on share
 
-feols(pct.out ~ nd_death | district + cycle + party, data=agg2)
-feols(pct.amt.out ~ nd_death | district + cycle + party, data=agg2)
+feols(pct.out ~ nd_death | district + cycle + party, data=agg)
+feols(pct.amt.out ~ nd_death | district + cycle + party, data=agg)
 
-feols(pct.out ~ nd_affected | district + cycle + party, data=agg2)
-feols(pct.amt.out ~ nd_affected | district + cycle + party, data=agg2)
+feols(pct.out ~ nd_death | district^party + cycle^party, data=agg)
+feols(pct.amt.out ~ nd_death | district^party + cycle^party, data=agg)
 
-feols(pct.out ~ nd_damages | district + cycle + party, data=agg2)
-feols(pct.amt.out ~ nd_damages | district + cycle + party, data=agg2)
+feols(pct.out ~ nd_affected | district + cycle + party, data=agg)
+feols(pct.amt.out ~ nd_affected | district + cycle + party, data=agg)
+
+feols(pct.out ~ nd_affected | district^party + cycle^party, data=agg)
+feols(pct.amt.out ~ nd_affected | district^party + cycle^party, data=agg)
+
+feols(pct.out ~ nd_damages | district + cycle + party, data=agg)
+feols(pct.amt.out ~ nd_damages | district + cycle + party, data=agg)
+
+feols(pct.out ~ nd_damages | district^party + cycle^party, data=agg)
+feols(pct.amt.out ~ nd_damages | district^party + cycle^party, data=agg)
 
 ## effect of nd on share (limit nd to close ones)
 
 agg$close <- as.numeric(agg$close)
 agg <- agg %>% ungroup(.) %>% mutate(nd_death2 = ifelse(.$close < 300 & .$nd_death == 1, 1, 0),
-                                     nd_affect2 = ifelse(.$close < 300 & .$nd_affect == 1, 1, 0),
-                                     nd_both2 = ifelse(.$close < 300 & .$nd_both == 1, 1, 0))
+                                     nd_affect2 = ifelse(.$close < 300 & .$nd_affected == 1, 1, 0),
+                                     nd_both2 = ifelse(.$close < 300 & .$nd_damages == 1, 1, 0))
+# seems like this is just making agg2 within agg
 
 feols(pct.out ~ nd_death2 | district + cycle + party, data=agg)
 feols(pct.amt.out ~ nd_death2 | district + cycle + party, data=agg)
 
+feols(pct.out ~ nd_death2 | district^party + cycle^party, data=agg)
+feols(pct.amt.out ~ nd_death2 | district^party + cycle^party, data=agg)
+
 feols(pct.out ~ nd_affect2 | district + cycle + party, data=agg)
 feols(pct.amt.out ~ nd_affect2 | district + cycle + party, data=agg)
 
+feols(pct.out ~ nd_affect2 | district^party + cycle^party, data=agg)
+feols(pct.amt.out ~ nd_affect2 | district^party + cycle^party, data=agg)
+
 feols(pct.out ~ nd_both2 | district + cycle + party, data=agg)
 feols(pct.amt.out ~ nd_both2 | district + cycle + party, data=agg)
+
+feols(pct.out ~ nd_both2 | district^party + cycle^party, data=agg) # but actually damages
+feols(pct.amt.out ~ nd_both2 | district^party + cycle^party, data=agg)
 
 
 ### effect of nd on ideology
@@ -474,9 +535,9 @@ winner <- join %>% filter(p_elec_stat == "W") %>%
 winner <- left_join(winner, try,
                     by= c("district" = "cong",
                           "cycle"= "year.x")) %>% 
-  mutate(nd_death = ifelse(is.na(.$death10 == T), 0, .$death10),
-         nd_affect = ifelse(is.na(.$affect10 == T), 0, .$affect10),
-         nd_both = ifelse(is.na(.$both == T), 0, .$both))
+  mutate(nd_death = ifelse(is.na(.$deaths == T), 0, .$deaths),
+         nd_affect = ifelse(is.na(.$affected == T), 0, .$affected),
+         nd_both = ifelse(is.na(.$damages == T), 0, .$damages))
 
 # construct DV (ideology)
 winner <- winner %>% mutate(# cfscore
@@ -495,7 +556,20 @@ winner <- winner %>% mutate(# cfscore
          ab.dist.dwdime = abs(.$dist.dwdime),
          ab.dist.dw1 = abs(.$dist.dw1))
 
+winner <- winner %>% mutate(nd_death = ifelse(nd_death >= 46, 1, 0),
+                      nd_affect = ifelse(nd_affect >=225000, 1, 0),
+                      nd_both = ifelse(nd_both >= 9916769, 1, 0))
+
+
 ## analysis: effect of nd on ideology
+
+feols(ab.dw1 ~ nd_death | district^party + cycle^party, data=winner)
+feols(ab.dist.dw1 ~ nd_death | district^party + cycle^party, data=winner)
+feols(ab.dw1 ~ nd_affect | district^party + cycle^party, data=winner)
+feols(ab.dist.dw1 ~ nd_affect | district^party + cycle^party, data=winner)
+feols(ab.dw1 ~ nd_both | district^party + cycle^party, data=winner)
+feols(ab.dist.dw1 ~ nd_both | district^party + cycle^party, data=winner)
+
 
 feols(ab.cfscore ~ nd_death | district + cycle + party, data=winner)
 feols(ab.dist ~ nd_death | district + cycle + party, data=winner)
@@ -525,6 +599,12 @@ winner <- winner %>% ungroup(.) %>% mutate(close = as.numeric(close),
                                            nd_affect2 = ifelse(.$close < 300 & .$nd_affect == 1, 1, 0),
                                            nd_both2 = ifelse(.$close < 300 & .$nd_both == 1, 1, 0))
 
+feols(ab.dw1 ~ nd_death2 | district^party + cycle^party, data=winner)
+feols(ab.dist.dw1 ~ nd_death2 | district^party + cycle^party, data=winner)
+feols(ab.dw1 ~ nd_affect2 | district^party + cycle^party, data=winner)
+feols(ab.dist.dw1 ~ nd_affect2 | district^party + cycle^party, data=winner)
+feols(ab.dw1 ~ nd_both2 | district^party + cycle^party, data=winner)
+feols(ab.dist.dw1 ~ nd_both2 | district^party + cycle^party, data=winner)
 
 feols(ab.cfscore ~ nd_death2 | district + cycle + party, data=winner)
 feols(ab.dist ~ nd_death2 | district + cycle + party, data=winner)
@@ -590,15 +670,23 @@ prob <- prob2 %>% group_by(year, party, cong) %>% summarize(num = n(),
 prob_anl <- left_join(prob, try,
                     by= c("cong" = "cong",
                           "year"= "year.x")) %>% 
-  mutate(nd_death = ifelse(is.na(.$death10 == T), 0, .$death10),
-         nd_affect = ifelse(is.na(.$affect10 == T), 0, .$affect10),
-         nd_both = ifelse(is.na(.$both == T), 0, .$both)) %>% 
+  mutate(nd_death = ifelse(is.na(.$deaths == T), 0, .$deaths),
+         nd_affect = ifelse(is.na(.$affected == T), 0, .$affected),
+         nd_both = ifelse(is.na(.$damages == T), 0, .$damages)) %>% 
   mutate(close = as.numeric(.$close),
          nd_death2 = ifelse(.$close < 300 & .$nd_death == 1, 1, 0),
          nd_affect2 = ifelse(.$close < 300 & .$nd_affect == 1, 1, 0),
          nd_both2 = ifelse(.$close < 300 & .$nd_both == 1, 1, 0))
 
 # analysis
+
+feols(prob_dw1 ~ nd_death | cong^party + year^party, data=prob_anl)
+feols(prob_dw2 ~ nd_death | cong^party + year^party, data=prob_anl)
+feols(prob_dw1 ~ nd_affect | cong^party + year^party, data=prob_anl)
+feols(prob_dw2 ~ nd_affect | cong^party + year^party, data=prob_anl)
+feols(prob_dw1 ~ nd_both | cong^party + year^party, data=prob_anl)
+feols(prob_dw2 ~ nd_both | cong^party + year^party, data=prob_anl)
+
 
 feols(prob_cf ~ nd_death | cong + year + party, data=prob_anl)
 feols(prob_dw1 ~ nd_death | cong + year + party, data=prob_anl)
@@ -616,6 +704,14 @@ feols(prob_dw2 ~ nd_both | cong + year + party, data=prob_anl)
 feols(prob_dd ~ nd_both | cong + year + party, data=prob_anl)
 
 # filtering <300
+
+feols(prob_dw1 ~ nd_death2 | cong^party + year^party, data=prob_anl)
+feols(prob_dw2 ~ nd_death2 | cong^party + year^party, data=prob_anl)
+feols(prob_dw1 ~ nd_affect2 | cong^party + year^party, data=prob_anl)
+feols(prob_dw2 ~ nd_affect2 | cong^party + year^party, data=prob_anl)
+feols(prob_dw1 ~ nd_both2 | cong^party + year^party, data=prob_anl)
+feols(prob_dw2 ~ nd_both2 | cong^party + year^party, data=prob_anl)
+
 
 feols(prob_cf ~ nd_death2 | cong + year + party, data=prob_anl)
 feols(prob_dw1 ~ nd_death2 | cong + year + party, data=prob_anl)
