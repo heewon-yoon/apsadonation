@@ -15,6 +15,7 @@ library(sqldf)
 library(data.table)
 library(readxl)
 library(reshape)
+library(usdata)
 
 #-------------------------------------------------------
 # DIME
@@ -53,6 +54,27 @@ library(reshape)
 
 cand <- read.csv("/Users/hyoon/Desktop/Yoon2/substitution/dime 08:21:24/cand.csv") %>% select(-X)
 cont <- read.csv("/Users/hyoon/Desktop/Yoon2/substitution/dime 08:21:24/cont.csv") %>% select(-c(X, X.1))
+
+state_lookup <- data.frame(
+  STATEFP = c("01", "02", "04", "05", "06", "08", "09", "10", "11", "12", 
+              "13", "15", "16", "17", "18", "19", "20", "21", "22", "23", 
+              "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", 
+              "34", "35", "36", "37", "38", "39", "40", "41", "42", "44", 
+              "45", "46", "47", "48", "49", "50", "51", "53", "54", "55", 
+              "56"),
+  State = c("Alabama", "Alaska", "Arizona", "Arkansas", "California", 
+            "Colorado", "Connecticut", "Delaware", "District of Columbia", 
+            "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", 
+            "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", "Maine", 
+            "Maryland", "Massachusetts", "Michigan", "Minnesota", 
+            "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada", 
+            "New Hampshire", "New Jersey", "New Mexico", "New York", 
+            "North Carolina", "North Dakota", "Ohio", "Oklahoma", 
+            "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", 
+            "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", 
+            "Virginia", "Washington", "West Virginia", "Wisconsin", 
+            "Wyoming")
+)
 
 state_lookup <- state_lookup %>% mutate(state = tolower(state2abbr(State)))
 
@@ -169,27 +191,6 @@ library(usdata)
 
 shapefile_data <- st_read("/Users/hyoon/Desktop/Yoon2/substitution/cb_2021_us_county_within_cd116_500k/cb_2021_us_county_within_cd116_500k.shp")
 
-state_lookup <- data.frame(
-  STATEFP = c("01", "02", "04", "05", "06", "08", "09", "10", "11", "12", 
-              "13", "15", "16", "17", "18", "19", "20", "21", "22", "23", 
-              "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", 
-              "34", "35", "36", "37", "38", "39", "40", "41", "42", "44", 
-              "45", "46", "47", "48", "49", "50", "51", "53", "54", "55", 
-              "56"),
-  State = c("Alabama", "Alaska", "Arizona", "Arkansas", "California", 
-            "Colorado", "Connecticut", "Delaware", "District of Columbia", 
-            "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", 
-            "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", "Maine", 
-            "Maryland", "Massachusetts", "Michigan", "Minnesota", 
-            "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada", 
-            "New Hampshire", "New Jersey", "New Mexico", "New York", 
-            "North Carolina", "North Dakota", "Ohio", "Oklahoma", 
-            "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", 
-            "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", 
-            "Virginia", "Washington", "West Virginia", "Wisconsin", 
-            "Wyoming")
-)
-
 pri117 <- read_excel("/Users/hyoon/Desktop/Yoon2/substitution/pridates117.xlsx") %>% 
   mutate(abb = state2abbr(.$state),
          date = as.Date(.$date))
@@ -246,7 +247,7 @@ dis_date <- trial %>% group_by(year.x, cong) %>% arrange(year.x, cong, close) %>
 dis <- left_join(dis_sum, dis_date, by = c("year.x"="year.x",
                                            "cong"="cong"))
 
-# disaster within a year (close < 365)
+# disaster within a year (close < 300)
 dis_ysum <- trial %>% group_by(year.x, cong) %>% filter(close <= 300) %>% summarize(deaths = sum(`Total Deaths`),
                                                                                  affected = sum(`Total Affected`),
                                                                                  damages = sum(`Total Damage, Adjusted ('000 US$)`),
@@ -282,6 +283,9 @@ agg_all <- left_join(agg, dis,
             by = c("cycle" = "year.x",
                    "district" = "cong")) %>%
   filter(party %in% c(100,200))
+
+# no disaster record on 2000, 2020, 2022 --> should drop these years
+agg_all <- agg_all %>% filter(!cycle %in% c(2000, 2020, 2022))
 #-------------------------------------------------------
 
 
@@ -305,8 +309,6 @@ agg_all %>% group_by(cycle) %>% summarize(sum_deaths300 = sum(deaths.y, na.rm=T)
                                           mean_damages300 = mean(damages.y, na.rm=T),
                                           count = n())
 
-# no disaster record on 2000, 2020, 2022 --> should drop these years
-agg_all <- agg_all %>% filter(!cycle %in% c(2000, 2020, 2022))
 #-------------------------------------------------------
 
 
@@ -325,10 +327,14 @@ trend <- join %>% group_by(cycle, party) %>% drop_na(same) %>%
   mutate(pct.out = n.out/(n.in+n.out)*100,
          pct.amt.out = amt.out/(amt.in+amt.out)*100)
 
-ggplot(trend %>% filter(party %in% c(100, 200)), aes(x=cycle, y=pct.out, color = factor(party))) + 
+trend_pattern <- ggplot(trend %>% filter(party %in% c(100, 200)), aes(x=cycle, y=pct.out, color = factor(party))) + 
   geom_point() + geom_line() + ylim(0,100) + theme(legend.position="bottom") +
   xlab("") + ylab("% Out-of-District Donations") +
-  scale_color_manual(values=c( "#56B4E9", "#E69F00"), name = "Party", labels = c("Dem", "Rep")) 
+  scale_color_manual(values=c( "skyblue3", "salmon3"), name = "Party", labels = c("Dem", "Rep")) 
+
+pdf("/Users/hyoon/Desktop/Yoon2/11. 2023Fall/apsa_interdistrict/apsadonation/pattern.pdf", width = 8, height = 6)
+print(trend_pattern) 
+dev.off()
 
 # contribution patterns of donors
 
@@ -349,7 +355,10 @@ pattern <- join %>% group_by(contributor_state) %>% filter(party %in% c(100,200)
                             group == "in_r" ~ "in",
                             group == "in_d" ~ "in",
                             group == "out_r" ~ "out",
-                            group == "out_d" ~ "out"))
+                            group == "out_d" ~ "out")) %>%
+  mutate(legend_group = interaction(party, source)) %>%
+  arrange(group == "mean", desc(cf_score)) %>% # Arrange to prioritize "mean" first
+  mutate(contributor_state = factor(contributor_state, levels = unique(contributor_state[group == "mean"])))
 
 # mean_values <- pattern %>%
 #   filter(party == "mean") %>%
@@ -362,7 +371,7 @@ pattern <- join %>% group_by(contributor_state) %>% filter(party %in% c(100,200)
 
 pattern$legend_group <- interaction(pattern$party, pattern$source)
 
-ggplot(pattern, aes(x = cf_score, y = contributor_state, color = legend_group, shape = legend_group)) + 
+cont_pattern <- ggplot(pattern, aes(x = cf_score, y = contributor_state, color = legend_group, shape = legend_group)) + 
   geom_point() + 
   scale_color_manual(values = c("mean.mean" = "darkgrey", 
                                 "r.in" = "salmon3", 
@@ -376,6 +385,10 @@ ggplot(pattern, aes(x = cf_score, y = contributor_state, color = legend_group, s
   theme(legend.position="bottom") +
   xlab("CF Score") + 
   ylab("Contributor State")
+
+pdf("/Users/hyoon/Desktop/Yoon2/11. 2023Fall/apsa_interdistrict/apsadonation/cont_pattern.pdf", width = 8, height = 6)
+print(cont_pattern) 
+dev.off()
 
 # ggplot(pattern, aes(x=cf_score, y=contributor_state, color=factor(source), shape=factor(party))) + 
 #   geom_point() + 
