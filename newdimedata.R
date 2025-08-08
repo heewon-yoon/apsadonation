@@ -7,7 +7,7 @@
 # relevant codes are at 
 # "~/Desktop/Yoon/7. 2021Fall/Dissertation Prosepctus/moneypaper/codes.R"
 # "/Users/hyoon/Desktop/Yoon2/substitution/sub/sub.Rmd"
-# "/Users/hyoon/Desktop/apsa_interdistrict/postapsa.Rmd"
+# "/Users/hyoon/Desktop/apsa_interdistrict/postapsa.Rmd" --> only with data up until 2016
 
 library(tidyverse)
 library(RSQLite)
@@ -328,9 +328,16 @@ trend <- join %>% group_by(cycle, party) %>% drop_na(same) %>%
          pct.amt.out = amt.out/(amt.in+amt.out)*100)
 
 trend_pattern <- ggplot(trend %>% filter(party %in% c(100, 200)), aes(x=cycle, y=pct.out, color = factor(party))) + 
-  geom_point() + geom_line() + ylim(0,100) + theme(legend.position="bottom") +
-  xlab("") + ylab("% Out-of-District Donations") +
-  scale_color_manual(values=c( "skyblue3", "salmon3"), name = "Party", labels = c("Dem", "Rep")) 
+  geom_point() + 
+  geom_line() + 
+  ylim(0,100) + 
+  xlab("") + 
+  ylab("% Out-of-District Donations") +
+  scale_color_manual(values=c("#4A90E2", "#C44E52"), 
+                     name = NULL,
+                     labels = c("Dem", "Rep")) +
+  theme_minimal() + 
+  theme(legend.position="bottom")
 
 pdf("/Users/hyoon/Desktop/Yoon2/11. 2023Fall/apsa_interdistrict/apsadonation/pattern.pdf", width = 8, height = 6)
 print(trend_pattern) 
@@ -374,17 +381,18 @@ pattern$legend_group <- interaction(pattern$party, pattern$source)
 cont_pattern <- ggplot(pattern, aes(x = cf_score, y = contributor_state, color = legend_group, shape = legend_group)) + 
   geom_point() + 
   scale_color_manual(values = c("mean.mean" = "darkgrey", 
-                                "r.in" = "salmon3", 
-                                "r.out" = "skyblue3", 
-                                "d.in" = "salmon3", 
-                                "d.out" = "skyblue3"),
+                                "r.in" = "#C44E52", 
+                                "r.out" = "#4A90E2", 
+                                "d.in" = "#C44E52", 
+                                "d.out" = "#4A90E2"),
                      labels = c("Dem (In)", "Rep (In)", "Mean", "Dem (Out)", "Rep (Out)")) + 
   scale_shape_manual(values = c(15, 17, 16, 15, 17),
                      labels = c("Dem (In)", "Rep (In)", "Mean", "Dem (Out)", "Rep (Out)")) + 
   labs(color = "", shape = "") +
-  theme(legend.position="bottom") +
   xlab("CF Score") + 
-  ylab("Contributor State")
+  ylab("Contributor State") +
+  theme_minimal() + 
+  theme(legend.position="bottom") 
 
 pdf("/Users/hyoon/Desktop/Yoon2/11. 2023Fall/apsa_interdistrict/apsadonation/cont_pattern.pdf", width = 8, height = 6)
 print(cont_pattern) 
@@ -433,50 +441,53 @@ agg_all <- agg_all %>% group_by(cycle) %>% mutate(nd_death = ifelse(deaths.x >= 
 library(fixest)
 
 ## effect of ND on donor composition
+# in: negative
+# out: indifferent
+# share of out: positive
 
 feols(n.in ~ nd_death | district^party + cycle^party, cluster = ~district, agg_all)
 feols(n.out ~ nd_death | district^party + cycle^party, cluster = ~district, agg_all)
 feols(amt.in ~ nd_death | district^party + cycle^party, cluster = ~district, agg_all)
 feols(amt.out ~ nd_death | district^party + cycle^party, cluster = ~district, agg_all)
 
-feols(pct.out ~ nd_death | district^party + cycle^party, cluster = ~district, agg_all)
-feols(pct.amt.out ~ nd_death | district^party + cycle^party, cluster = ~district, agg_all)
+feols(pct.out ~ nd_death | district^party + cycle^party, cluster = ~district, agg_all %>% filter(cycle < 2016) )
+feols(pct.amt.out ~ nd_death | district^party + cycle^party, cluster = ~district, agg_all %>% filter(cycle < 2016))
 
-feols(pct.out ~ nd_affected | district^party + cycle^party, cluster = ~district, agg_all)
-feols(pct.amt.out ~ nd_affected | district^party + cycle^party, cluster = ~district, agg_all)
+feols(pct.out ~ nd_affected | district^party + cycle^party, cluster = ~district, agg_all %>% filter(cycle < 2016))
+feols(pct.amt.out ~ nd_affected | district^party + cycle^party, cluster = ~district, agg_all %>% filter(cycle < 2016))
 
-feols(pct.out ~ nd_damages | district^party + cycle^party, cluster = ~district, agg_all)
-feols(pct.amt.out ~ nd_damages | district^party + cycle^party, cluster = ~district, agg_all)
+feols(pct.out ~ nd_damages | district^party + cycle^party, cluster = ~district, agg_all %>% filter(cycle < 2016) )
+feols(pct.amt.out ~ nd_damages | district^party + cycle^party, cluster = ~district, agg_all %>% filter(cycle < 2016))
 
-feols(pct.out ~ nd_num | district^party + cycle^party, cluster = ~district, agg_all)
-feols(pct.amt.out ~ nd_num | district^party + cycle^party, cluster = ~district, agg_all)
+feols(pct.out ~ nd_num | district^party + cycle^party, cluster = ~district, agg_all %>% filter(cycle < 2016))
+feols(pct.amt.out ~ nd_num | district^party + cycle^party, cluster = ~district, agg_all %>% filter(cycle < 2016))
 
-feols(pct.out ~ nd_death_y | district^party + cycle^party, cluster = ~district, agg_all)
-feols(pct.amt.out ~ nd_death_y | district^party + cycle^party, cluster = ~district, agg_all)
+feols(pct.out ~ nd_death_y | district^party + cycle^party, cluster = ~district, agg_all %>% filter(cycle < 2016))
+feols(pct.amt.out ~ nd_death_y | district^party + cycle^party, cluster = ~district, agg_all %>% filter(cycle < 2016))
 
-feols(pct.out ~ nd_affected_y | district^party + cycle^party, cluster = ~district, agg_all)
-feols(pct.amt.out ~ nd_affected_y | district^party + cycle^party, cluster = ~district, agg_all)
+feols(pct.out ~ nd_affected_y | district^party + cycle^party, cluster = ~district, agg_all %>% filter(cycle < 2016))
+feols(pct.amt.out ~ nd_affected_y | district^party + cycle^party, cluster = ~district, agg_all %>% filter(cycle < 2016))
 
-feols(pct.out ~ nd_damages_y | district^party + cycle^party, cluster = ~district, agg_all)
-feols(pct.amt.out ~ nd_damages_y | district^party + cycle^party, cluster = ~district, agg_all)
+feols(pct.out ~ nd_damages_y | district^party + cycle^party, cluster = ~district, agg_all %>% filter(cycle < 2016))
+feols(pct.amt.out ~ nd_damages_y | district^party + cycle^party, cluster = ~district, agg_all %>% filter(cycle < 2016))
 
-feols(pct.out ~ nd_num_y | district^party + cycle^party, cluster = ~district, agg_all)
-feols(pct.amt.out ~ nd_num_y | district^party + cycle^party, cluster = ~district, agg_all)
+feols(pct.out ~ nd_num_y | district^party + cycle^party, cluster = ~district, agg_all %>% filter(cycle < 2016))
+feols(pct.amt.out ~ nd_num_y | district^party + cycle^party, cluster = ~district, agg_all %>% filter(cycle < 2016))
 
 
-feols(pct.out ~ nd_death | district + party + cycle, agg_all)
-feols(pct.amt.out ~ nd_death | district + party + cycle, agg_all)
-feols(pct.out ~ nd_affected | district + party + cycle, agg_all)
-feols(pct.amt.out ~ nd_affected | district + party + cycle, agg_all)
-feols(pct.out ~ nd_damages | district + party + cycle, agg_all)
-feols(pct.amt.out ~ nd_damages | district + party + cycle, agg_all)
+feols(pct.out ~ nd_death | district + party + cycle, agg_all %>% filter(cycle < 2016))
+feols(pct.amt.out ~ nd_death | district + party + cycle, agg_all %>% filter(cycle < 2016))
+feols(pct.out ~ nd_affected | district + party + cycle, agg_all %>% filter(cycle < 2016))
+feols(pct.amt.out ~ nd_affected | district + party + cycle, agg_all %>% filter(cycle < 2016))
+feols(pct.out ~ nd_damages | district + party + cycle, agg_all %>% filter(cycle < 2016))
+feols(pct.amt.out ~ nd_damages | district + party + cycle, agg_all %>% filter(cycle < 2016))
 
-feols(pct.out ~ nd_death_y | district + party + cycle, agg_all)
-feols(pct.amt.out ~ nd_death_y | district + party + cycle, agg_all)
-feols(pct.out ~ nd_affected_y | district + party + cycle, agg_all)
-feols(pct.amt.out ~ nd_affected_y | district + party + cycle, agg_all)
-feols(pct.out ~ nd_damages_y | district + party + cycle, agg_all)
-feols(pct.amt.out ~ nd_damages_y | district + party + cycle, agg_all)
+feols(pct.out ~ nd_death_y | district + party + cycle, agg_all %>% filter(cycle < 2016))
+feols(pct.amt.out ~ nd_death_y | district + party + cycle, agg_all %>% filter(cycle < 2016))
+feols(pct.out ~ nd_affected_y | district + party + cycle, agg_all %>% filter(cycle < 2016))
+feols(pct.amt.out ~ nd_affected_y | district + party + cycle, agg_all %>% filter(cycle < 2016))
+feols(pct.out ~ nd_damages_y | district + party + cycle, agg_all %>% filter(cycle < 2016))
+feols(pct.amt.out ~ nd_damages_y | district + party + cycle, agg_all %>% filter(cycle < 2016))
 
 
 ## effect of nd on candidate selection
