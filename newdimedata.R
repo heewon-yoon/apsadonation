@@ -124,6 +124,50 @@ emdat <- emdat %>% mutate(Location = sapply(emdat$Location, extract_states)) %>%
   mutate(Location = strsplit(as.character(Location), ",")) %>% unnest(Location) %>%
   mutate(Location = trimws(.$Location)) %>%
   mutate(state = state.abb[match(.$Location, state.name)]) %>% distinct()
+
+## descriptive stats
+
+# across states
+
+emdat_sum <- emdat %>% group_by(state) %>% summarize(n = n(),
+                                                     n_dist = n_distinct(DisNo.),
+                                                     tot_aff = sum(`Total Affected`, na.rm=T),
+                                                     tot_aff_log = log(tot_aff),
+                                                     .groups = "drop") %>%
+  mutate(state = tolower(state.name[match(state, state.abb)]))
+
+states_map <- map_data("state")
+
+map_data <- states_map %>%
+  left_join(emdat_sum, by = c("region" = "state"))
+
+plot_emdat <- function(data, fill_var, fill_label = "Count", title = "Case Counts by State") {
+  # Ensure fill_var is treated as a symbol for aes()
+  fill_sym <- rlang::sym(fill_var)
+  
+  ggplot(data, aes(x = long, y = lat, group = group, fill = !!fill_sym)) +
+    geom_polygon(color = "white") +
+    coord_fixed(1.3) +
+    scale_fill_gradient(low = "lightblue", high = "darkblue", na.value = "grey90") +
+    theme_void() +
+    labs(fill = fill_label, title = title)
+}
+
+plot_emdat(map_data, fill_var = "n", fill_label = "EMDAT Cases", title = "EMDAT Case Counts by State")
+plot_emdat(map_data, fill_var = "n_dist", fill_label = "EMDAT Cases", title = "EMDAT Case Counts by State (distinct cases)")
+plot_emdat(map_data, fill_var = "tot_aff", fill_label = "EMDAT Cases", title = "EMDAT Case Counts by State (by magnitude)")
+plot_emdat(map_data, fill_var = "tot_aff_log", fill_label = "EMDAT Cases", title = "EMDAT Case Counts by State (by logged magnitude)")
+
+
+# across years
+
+emdat_year <- emdat %>% group_by(`Start Year`) %>% summarize(n = n(),
+                                               n_dist = n_distinct(DisNo.),
+                                               .groups = "drop")
+
+ggplot(emdat_year, aes(x=`Start Year`, y=n)) + geom_point() + geom_line()
+ggplot(emdat_year, aes(x=`Start Year`, y=n_dist)) + geom_point() + geom_line()
+
 #-------------------------------------------------------
 
 
@@ -139,6 +183,82 @@ fema <- read.csv("/Users/hyoon/Desktop/Yoon2/substitution/sub/FemaWebDeclaration
   mutate(countycode = sprintf("%03d", as.numeric(.$countycode))) %>% 
   filter(designatedDate >= "2000-01-01" & designatedDate < "2022-12-12") %>%
   select("disasterNumber", "programTypeDescription", "stateCode", "placeName", "designatedDate", "countycode", "year", "month", "day")
+
+## descriptive stats
+
+## across states
+fem_sum <- fema %>% group_by(stateCode) %>% summarize(n = n(),
+                                                      n_dist = n_distinct(disasterNumber),
+                                                      .groups = "drop") %>%
+  mutate(stateCode = tolower(state.name[match(stateCode, state.abb)])) %>% arrange(desc(n))
+
+map_data_joined <- states_map %>%
+  left_join(fem_sum, by = c("region" = "stateCode"))
+
+# all
+ggplot(map_data_joined, aes(x = long, y = lat, group = group, fill = n)) +
+  geom_polygon(color = "white") +
+  coord_fixed(1.3) +
+  scale_fill_gradient(low = "lightblue", high = "darkblue", na.value = "grey90") +
+  theme_void() +
+  labs(fill = "FEMA Cases", title = "FEMA Case Counts by State") 
+
+# distinct disasters
+ggplot(map_data_joined, aes(x = long, y = lat, group = group, fill = n_dist)) +
+  geom_polygon(color = "white") +
+  coord_fixed(1.3) +
+  scale_fill_gradient(low = "lightblue", high = "darkblue", na.value = "grey90") +
+  theme_void() +
+  labs(fill = "FEMA Cases", title = "FEMA Case Counts by State") 
+
+# by county
+
+county_map <- map_data("county")
+
+fema_county <- fema %>% mutate(stateCode = tolower(state.name[match(stateCode, state.abb)]),
+                               county = tolower(gsub("\\s*\\([^\\)]+\\)", "", placeName))) %>%
+  group_by(stateCode, county) %>% summarize(n = n(),
+                                       n_distinct = n_distinct(disasterNumber))
+
+map_data_county <- county_map %>%
+  left_join(fema_county, by = c("region" = "stateCode", "subregion" = "county"))
+
+ggplot(map_data_county, aes(long, lat, group = group, fill = n)) +
+  geom_polygon(color = "white", size = 0.2) +
+  coord_fixed(1.3) +
+  scale_fill_viridis_c(option = "plasma", na.value = "grey90") +
+  labs(fill = "Total Count") +
+  theme_minimal() +
+  theme(
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank()
+  ) +
+  theme(legend.position = "bottom")
+
+ggplot(map_data_county, aes(long, lat, group = group, fill = n_distinct)) +
+  geom_polygon(color = "white", size = 0.2) +
+  coord_fixed(1.3) +
+  scale_fill_viridis_c(option = "plasma", na.value = "grey90") +
+  labs(fill = "Distinct Count") +
+  theme_minimal() +
+  theme(
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank()
+  ) +
+  theme(legend.position = "bottom")
+
+## across years
+
+# all
+fema %>% group_by(year) %>% summarize(n = n(), .groups = "drop") %>%
+  ggplot(aes(x=year, y=n)) + geom_point() + geom_line()
+
+# unique disasters
+fema %>% group_by(year) %>% summarize(n = n_distinct(disasterNumber), .groups = "drop") %>%
+  ggplot(aes(x=year, y=n)) + geom_point() + geom_line()
+
 #-------------------------------------------------------
 
 
@@ -236,6 +356,20 @@ trial <- left_join(cong %>% mutate(county = as.numeric(.$county),
 # choose which date?
 # can i say disaster in one county is disaster in the district? 
 
+collapsed <- trial %>%
+  group_by(year = year.y, cong) %>%
+  summarise(
+    unique_disasters = n_distinct(disasterNumber),
+    total_rows       = n(),
+    total_deaths     = sum(`Total Deaths`, na.rm = TRUE),
+    total_damage     = sum(`Total Damage, Adjusted ('000 US$)`, na.rm = TRUE),
+    total_affected   = sum(`Total Affected`, na.rm = TRUE),
+    close_avg        = mean(close, na.rm = TRUE),
+    close_min        = min(close, na.rm = TRUE),
+    close_max        = max(close, na.rm = TRUE),
+    .groups = "drop"
+  )
+
 # magnitude, frequency
 # add up the disaster damage and for disaster date choose the one closer to primary date
 dis_sum <- trial %>% group_by(year.x, cong) %>% summarize(deaths = sum(`Total Deaths`),
@@ -264,6 +398,34 @@ dis_y <- left_join(dis_ysum, dis_ydate, by=c("year.x"="year.x",
 #-------------------------------------------------------
 # Join disaster and dime
 #-------------------------------------------------------
+# join is contributor level data
+# need to aggregate to congressional district level
+donor_sum <- join %>%
+  filter(!is.na(same), district != "") %>%
+  group_by(district, cycle, party) %>%
+  summarise(
+    n_total   = n(),
+    n_in      = sum(same == 1),                  
+    n_out     = sum(same == 0),
+    amt_in    = sum(amount[same == 1], na.rm = TRUE),
+    amt_out   = sum(amount[same == 0], na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    amt_total   = amt_in + amt_out,
+    pct_in_cnt  = if_else(n_total > 0, 100 * n_in  / n_total, NA_real_),
+    pct_out_cnt = if_else(n_total > 0, 100 * n_out / n_total, NA_real_),
+    pct_in_amt  = if_else(amt_total > 0, 100 * amt_in  / amt_total, NA_real_),
+    pct_out_amt = if_else(amt_total > 0, 100 * amt_out / amt_total, NA_real_)
+  )
+
+donor <- donor_sum %>% filter(party %in% c(100,200)) %>% filter(cycle > 2000, cycle < 2020) %>%
+  left_join(collapsed,
+                       by = c("cycle" = "year",
+                              "district" = "cong")) 
+# collapsed (disaster) missing years: 2000, 2019
+# donor_sum (contribution) has 2000-2022
+
 # group by contributor district or just district??
 agg <- join %>% group_by(district, cycle, party) %>% drop_na(same) %>%
   summarize(count = n(),
@@ -290,10 +452,75 @@ agg_all <- agg_all %>% filter(!cycle %in% c(2000, 2020, 2022))
 
 
 #-------------------------------------------------------
-# examine disaster trend
+# Examine disaster trend
 #-------------------------------------------------------
-table(agg_all$damages.x)
+summary_long <- donor %>%
+  group_by(cycle) %>%
+  summarise(
+    across(
+      c(unique_disasters, total_rows, total_deaths, total_damage,
+        total_affected, close_avg, close_min, close_max),
+      list(sum = ~sum(.x, na.rm = TRUE),
+           mean = ~mean(.x, na.rm = TRUE)),
+      .names = "{.fn}_{.col}"
+    ),
+    .groups = "drop"
+  ) %>%
+  # pivot BOTH sum_ and mean_ totals and parse into stat + metric
+  pivot_longer(
+    cols = c(starts_with("sum_total"), starts_with("mean_total")),
+    names_to = c("stat", "metric"),
+    names_pattern = "(sum|mean)_total_(.*)",
+    values_to = "value"
+  ) %>%
+  mutate(
+    stat   = ifelse(stat == "sum", "Sum", "Mean"),
+    metric = dplyr::recode(metric,
+                           rows = "Rows",
+                           deaths = "Deaths",
+                           affected = "Affected",
+                           damage = "Damages",
+                           .default = metric)
+  )
 
+# trend by cycle/ sum, mean
+ggplot(summary_long, aes(x = cycle, y = value, color = stat, group = stat)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  facet_wrap(~ metric, scales = "free_y") +
+  theme_minimal() +
+  labs(
+    title = "Trends by Cycle: Sum vs Mean",
+    x = "Cycle",
+    y = "Value",
+    color = ""
+  )
+
+# mean
+ggplot(summary_long %>% filter(stat == "Mean"), aes(x = cycle, y = value)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  facet_wrap(~ metric, scales = "free_y") +
+  theme_minimal() +
+  labs(
+    title = "Trends by Cycle: Mean",
+    x = "Cycle",
+    y = "Value"
+  )
+
+# sum
+ggplot(summary_long %>% filter(stat == "Sum"), aes(x = cycle, y = value)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  facet_wrap(~ metric, scales = "free_y") +
+  theme_minimal() +
+  labs(
+    title = "Trends by Cycle: Sum",
+    x = "Cycle",
+    y = "Value"
+  )
+
+# before
 agg_all %>% group_by(cycle) %>% summarize(sum_deaths = sum(deaths.x, na.rm=T),
                                           mean_deaths = mean(deaths.x, na.rm=T),
                                           sum_affected = sum(affected.x, na.rm=T),
@@ -316,34 +543,82 @@ agg_all %>% group_by(cycle) %>% summarize(sum_deaths300 = sum(deaths.y, na.rm=T)
 # Descriptive Stats
 #-------------------------------------------------------
 
-# trend in out-of-district donations
+## trend in out-of-district donations
 
-trend <- join %>% group_by(cycle, party) %>% drop_na(same) %>%
-  summarize(count = n(),
-            n.in = sum(same==1),
-            n.out = sum(same==0),
-            amt.in = sum(amount[same==1]),
-            amt.out = sum(amount[same==0])) %>%
-  mutate(pct.out = n.out/(n.in+n.out)*100,
-         pct.amt.out = amt.out/(amt.in+amt.out)*100)
+trend <- join %>% filter(!is.na(same), district != "", party %in% c(100,200)) %>%
+  group_by(cycle, party) %>% 
+  summarize(n_total = n(),
+            n_in = sum(same==1),
+            n_out = sum(same==0),
+            amt_in = sum(amount[same==1], na.rm=T),
+            amt_out = sum(amount[same==0], na.rm=T),
+            .groups = "drop") %>%
+  mutate(amt_total   = amt_in + amt_out,
+         pct_in_cnt  = if_else(n_total > 0, 100 * n_in  / n_total, NA_real_),
+         pct_out_cnt = if_else(n_total > 0, 100 * n_out / n_total, NA_real_),
+         pct_in_amt  = if_else(amt_total > 0, 100 * amt_in  / amt_total, NA_real_),
+         pct_out_amt = if_else(amt_total > 0, 100 * amt_out / amt_total, NA_real_))
 
-trend_pattern <- ggplot(trend %>% filter(party %in% c(100, 200)), aes(x=cycle, y=pct.out, color = factor(party))) + 
+plot_data <- trend %>%
+  mutate(
+    party_label = dplyr::recode(
+      party,
+      `100` = "Democrats",
+      `200` = "Republicans"
+    )
+  ) %>%
+  pivot_longer(
+    cols = c(pct_out_cnt, pct_out_amt),
+    names_to = "measure",
+    values_to = "value"
+  ) %>%
+  mutate(
+    measure = dplyr::recode(
+      measure,
+      pct_out_cnt = "Count",
+      pct_out_amt = "Amount"
+    )
+  )
+
+trend <- ggplot(plot_data, aes(x = cycle, y = value,
+                      color = party_label, linetype = measure)) +
+  geom_line(size = 1) +
+  geom_point(size = 1) +
+  scale_color_manual(
+    values = c("Democrats" = "#4A90E2",  # blue-ish
+               "Republicans" = "#C44E52") # red-ish
+  ) +
+  scale_y_continuous(limits = c(0, 100),
+                     labels = function(x) paste0(x, "%")) +
+  labs(
+#    title = "Outside-District Donations by Party",
+#    subtitle = "Count share vs Amount share",
+    x = "Cycle",
+    y = "Percent",
+    color = "Party",
+    linetype = "Out-of-District"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+trend_pattern <- ggplot(trend, aes(x=cycle, y=pct_out_cnt, color = factor(party))) + 
   geom_point() + 
   geom_line() + 
   ylim(0,100) + 
   xlab("") + 
   ylab("% Out-of-District Donations") +
   scale_color_manual(values=c("#4A90E2", "#C44E52"), 
-                     name = NULL,
+                     name = "Party",
                      labels = c("Dem", "Rep")) +
+  scale_x_continuous(breaks = unique(trend$cycle)) +
   theme_minimal() + 
   theme(legend.position="bottom")
 
 pdf("/Users/hyoon/Desktop/Yoon2/11. 2023Fall/apsa_interdistrict/apsadonation/pattern.pdf", width = 8, height = 6)
-print(trend_pattern) 
+print(trend) 
 dev.off()
 
-# contribution patterns of donors
+## contribution patterns of donors
 
 pattern <- join %>% group_by(contributor_state) %>% filter(party %in% c(100,200)) %>% drop_na(same) %>%
   summarize(mean = mean(contributor_cfscore, na.rm=T),
@@ -367,48 +642,64 @@ pattern <- join %>% group_by(contributor_state) %>% filter(party %in% c(100,200)
   arrange(group == "mean", desc(cf_score)) %>% # Arrange to prioritize "mean" first
   mutate(contributor_state = factor(contributor_state, levels = unique(contributor_state[group == "mean"])))
 
-# mean_values <- pattern %>%
-#   filter(party == "mean") %>%
-#   group_by(contributor_state) %>%
-#   summarise(mean_cf_score = mean(cf_score)) %>%
-#   arrange(mean_cf_score)
-# 
-# pattern$contributor_state <- factor(pattern$contributor_state, 
-#                                     levels = mean_values$contributor_state[order(mean_values$mean_cf_score)])
+pattern$party <- factor(pattern$party, levels = c("d", "r", "mean"))
+pattern$source <- factor(pattern$source, levels = c("in", "out", "mean"))
 
-pattern$legend_group <- interaction(pattern$party, pattern$source)
-
-cont_pattern <- ggplot(pattern, aes(x = cf_score, y = contributor_state, color = legend_group, shape = legend_group)) + 
-  geom_point() + 
-  scale_color_manual(values = c("mean.mean" = "darkgrey", 
-                                "r.in" = "#C44E52", 
-                                "r.out" = "#4A90E2", 
-                                "d.in" = "#C44E52", 
-                                "d.out" = "#4A90E2"),
-                     labels = c("Dem (In)", "Rep (In)", "Mean", "Dem (Out)", "Rep (Out)")) + 
-  scale_shape_manual(values = c(15, 17, 16, 15, 17),
-                     labels = c("Dem (In)", "Rep (In)", "Mean", "Dem (Out)", "Rep (Out)")) + 
-  labs(color = "", shape = "") +
+cont_pattern <- ggplot(pattern, aes(
+  x = cf_score, 
+  y = contributor_state,
+  color = party,
+  shape = source
+)) + 
+  geom_point(size = 1.5) +
+  scale_color_manual(
+    values = c("d" = "#4A90E2",   
+               "r" = "#C44E52",   
+               "mean" = "darkgrey"),
+    labels = c("Democrat", "Republican", "Mean")) +
+  scale_shape_manual(
+    values = c("in" = 16,         
+               "out" = 1,         
+               "mean" = 15),       
+    labels = c("In-State", "Out-of-State", "Mean")) +
+  labs(color = "Party", shape = "Source") +
   xlab("CF Score") + 
   ylab("Contributor State") +
-  theme_minimal() + 
-  theme(legend.position="bottom") 
+  theme_minimal() +
+  theme(legend.position = "bottom")
 
 pdf("/Users/hyoon/Desktop/Yoon2/11. 2023Fall/apsa_interdistrict/apsadonation/cont_pattern.pdf", width = 8, height = 6)
 print(cont_pattern) 
 dev.off()
-
-# ggplot(pattern, aes(x=cf_score, y=contributor_state, color=factor(source), shape=factor(party))) + 
-#   geom_point() + 
-#   scale_color_manual(values = c("#1F77B4", "darkgrey", "#C8102E")) + 
-#   scale_shape_manual(values = c(15, 16, 17)) + 
-#   xlab("CF Score") + ylab("Contributor State")
 #-------------------------------------------------------
 
 
 #-------------------------------------------------------
 # Coding disasters
 #-------------------------------------------------------
+# binary: whether disaster happened or not, top 10 percentile
+# intensity: count, severity (log transformed)
+
+# different thresholds
+make_topX <- function(data, q) {
+  cutoffs <- data %>%
+    summarise(
+      thr_count   = quantile(unique_disasters, q, na.rm = TRUE),
+      thr_deaths  = quantile(total_deaths, q, na.rm = TRUE),
+      thr_damage  = quantile(total_damage, q, na.rm = TRUE),
+      thr_affected= quantile(total_affected, q, na.rm = TRUE)
+    )
+  
+  data %>%
+    mutate(
+      !!paste0("top", (1-q)*100, "_count")    := if_else(unique_disasters >= cutoffs$thr_count, 1, 0),
+      !!paste0("top", (1-q)*100, "_deaths")   := if_else(total_deaths   >= cutoffs$thr_deaths, 1, 0),
+      !!paste0("top", (1-q)*100, "_damage")   := if_else(total_damage   >= cutoffs$thr_damage, 1, 0),
+      !!paste0("top", (1-q)*100, "_affected") := if_else(total_affected >= cutoffs$thr_affected, 1, 0)
+    )
+}
+
+
 # top 10% percentile
 agg_all <- agg_all %>% mutate(nd_death = ifelse(deaths.x >= quantile(agg_all$deaths.x[is.na(agg_all$num.x)==F], 0.9, na.rm=T), 1, 0),
                               nd_affected = ifelse(affected.x >= quantile(agg_all$affected.x[is.na(agg_all$num.x)==F], 0.9, na.rm=T), 1, 0),
